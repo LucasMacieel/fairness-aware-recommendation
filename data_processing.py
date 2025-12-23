@@ -1,0 +1,274 @@
+import pandas as pd
+import os
+import numpy as np
+
+
+def load_data(filepath):
+    """
+    Loads MovieLens data from the specified filepath.
+    Expected format: user id | item id | rating | timestamp
+    """
+    column_names = ["user_id", "item_id", "rating", "timestamp"]
+    df = pd.read_csv(filepath, sep="\t", names=column_names)
+    return df
+
+
+def create_user_item_matrix(df):
+    """
+    Converts the ratings DataFrame into a user-item matrix.
+    Rows: Users
+    Columns: Items
+    Values: Ratings
+    Missing values are filled with 0.
+    """
+    # Create pivot table
+    user_item_matrix = df.pivot(index="user_id", columns="item_id", values="rating")
+
+    # Fill missing values with 0
+    user_item_matrix_filled = user_item_matrix.fillna(0)
+
+    return user_item_matrix_filled
+
+
+def get_movielens_gender_map():
+    """
+    Parses u.user to create a mapping of user_id to gender.
+    Returns:
+        dict: {user_id: gender (M/F)}
+    """
+    data_path = get_movielens_data_path()
+    if not data_path:
+        return {}
+
+    user_file_path = os.path.join(os.path.dirname(data_path), "u.user")
+    if not os.path.exists(user_file_path):
+        return {}
+
+    gender_map = {}
+    with open(user_file_path, "r") as f:
+        for line in f:
+            parts = line.strip().split("|")
+            if len(parts) >= 3:
+                user_id = int(parts[0])
+                gender = parts[2]
+                gender_map[user_id] = gender
+
+    return gender_map
+
+
+def get_movielens_data_path():
+    """Locates the data file in data/movielens."""
+    possible_paths = [
+        os.path.join("data", "movielens", "u.data"),
+        os.path.join("..", "data", "movielens", "u.data"),
+        os.path.join("data", "u.data"),  # Fallback
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def get_movielens_data_numpy():
+    """
+    Returns the user-item matrix as a numpy array.
+    Also returns the user_ids and item_ids for mapping back.
+    """
+    data_path = get_movielens_data_path()
+    if not data_path:
+        raise FileNotFoundError("MovieLens data file not found.")
+
+    df = load_data(data_path)
+    matrix_df = create_user_item_matrix(df)
+
+    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+
+
+def get_post_data_path(filename):
+    """Locates files in the data/post directory."""
+    possible_paths = [
+        os.path.join("data", "post", filename),
+        os.path.join("..", "data", "post", filename),
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def get_post_data_numpy():
+    """
+    Returns the user-post interaction matrix as a numpy array from data/post.
+    Implicit feedback: 1 for viewed, 0 for not viewed.
+    """
+    view_path = get_post_data_path("view_data.csv")
+    if not view_path:
+        raise FileNotFoundError("View data file not found.")
+
+    # Load view data
+    # format: user_id, post_id, time_stamp
+    df_views = pd.read_csv(view_path)
+
+    # We treat any view as a 'positive' interaction (1)
+    df_views["rating"] = 1
+
+    # Create pivot table
+    # Since users can view multiple times, we just want to know if they viewed it at least once.
+    # drop_duplicates handles multiple views of same post by same user
+    df_views_unique = df_views[["user_id", "post_id", "rating"]].drop_duplicates()
+
+    # Pivot: Users as rows, Posts as columns
+    matrix_df = df_views_unique.pivot(
+        index="user_id", columns="post_id", values="rating"
+    )
+
+    # Fill missing with 0
+    matrix_df = matrix_df.fillna(0)
+
+    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+
+
+def get_post_gender_map():
+    """
+    Parses data/post/user_data.csv to create a mapping of user_id to gender.
+    Returns:
+        dict: {user_id: gender (M/F)}
+    """
+    user_path = get_post_data_path("user_data.csv")
+    if not user_path:
+        return {}
+
+    df_users = pd.read_csv(user_path)
+
+    # Standardize gender to M/F
+    gender_map = {}
+    for _, row in df_users.iterrows():
+        uid = row["user_id"]
+        gender_str = str(row["gender"]).lower()
+        if gender_str == "male":
+            gender_map[uid] = "M"
+        elif gender_str == "female":
+            gender_map[uid] = "F"
+        else:
+            gender_map[uid] = "Unknown"
+
+    return gender_map
+
+
+def get_sushi_data_path(filename):
+    """Locates files in the data/sushi directory."""
+    possible_paths = [
+        os.path.join("data", "sushi", filename),
+        os.path.join("..", "data", "sushi", filename),
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def get_sushi_data_numpy():
+    """
+    Returns the user-sushi rating matrix as a numpy array from data/sushi.
+    Source: sushi3b.5000.10.score
+    Original values: -1 (missing), 0-4 (ratings).
+    Transformed: 0 (missing), 1-5 (ratings).
+    """
+    score_path = get_sushi_data_path("sushi3b.5000.10.score")
+    if not score_path:
+        raise FileNotFoundError("Sushi score file not found.")
+
+    # Load dense matrix (space separated)
+    # The file has no header and is essentially already a matrix where rows=users, cols=items
+    df_matrix = pd.read_csv(score_path, sep=" ", header=None)
+
+    # Values might be read as floats if there are NaNs, but here -1 is used.
+    # Convert to numpy
+    matrix = df_matrix.values
+
+    # Transform ratings:
+    # -1 -> 0 (missing, unobserved)
+    # 0..4 -> 1..5 (observed ratings)
+
+    # Create a mask for valid ratings (>= 0)
+    valid_mask = matrix >= 0
+
+    # Initialize output matrix with 0s
+    final_matrix = np.zeros_like(matrix)
+
+    # Shift valid ratings by +1 and assign
+    final_matrix[valid_mask] = matrix[valid_mask] + 1
+
+    # Generate dummy IDs since the file is dense and sorted by ID
+    user_ids = list(range(matrix.shape[0]))
+    item_ids = list(range(matrix.shape[1]))
+
+    return final_matrix, user_ids, item_ids
+
+
+def get_sushi_gender_map():
+    """
+    Parses data/sushi/sushi3.udata to create a mapping of user_id to gender.
+    Returns:
+        dict: {user_index: gender (M/F)}
+    """
+    user_path = get_sushi_data_path("sushi3.udata")
+    if not user_path:
+        return {}
+
+    df_users = pd.read_csv(user_path, sep="\t", header=None)
+
+    # Col 1 is gender: 0:male, 1:female
+    gender_map = {}
+
+    for idx, row in df_users.iterrows():
+        # idx matches the matrix row index
+        gender_val = row[1]
+        if gender_val == 0:
+            gender_map[idx] = "M"
+        elif gender_val == 1:
+            gender_map[idx] = "F"
+        else:
+            gender_map[idx] = "Unknown"
+
+    return gender_map
+
+
+def main():
+    data_path = get_movielens_data_path()
+
+    if not data_path:
+        print(f"Error: Data file not found.")
+        return
+
+    print(f"Loading data from: {data_path}")
+    df = load_data(data_path)
+    print(f"Data loaded. Shape: {df.shape}")
+    print(df.head())
+
+    print("\nCreating user-item matrix...")
+    matrix_df = create_user_item_matrix(df)
+    print(f"Matrix created. Shape: {matrix_df.shape}")
+    print("\nMatrix Head (first 5 rows and columns):")
+    print(matrix_df.iloc[:5, :5])
+
+    # Optional: verifying uniqueness
+    n_users = df["user_id"].nunique()
+    n_items = df["item_id"].nunique()
+    print(f"\nUnique Users: {n_users}")
+    print(f"Unique Items: {n_items}")
+
+    if matrix_df.shape == (n_users, n_items):
+        print("Success: Matrix dimensions match unique user and item counts.")
+    else:
+        print("Warning: Matrix dimensions do not match unique counts.")
+
+    # Verify numpy conversion
+    print("\nVerifying Numpy Conversion:")
+    mat_np, u_ids, i_ids = get_movielens_data_numpy()
+    print(f"Numpy matrix shape: {mat_np.shape}")
+    print(f"Type: {type(mat_np)}")
+
+
+if __name__ == "__main__":
+    main()
