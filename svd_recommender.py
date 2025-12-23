@@ -162,7 +162,7 @@ def calculate_item_coverage(prediction_matrix, original_matrix, item_ids, k=10):
     return coverage_count, coverage_ratio
 
 
-def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name):
+def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=5):
     print(f"\nProcessing {dataset_name} Dataset...")
     print(f"Original Matrix Shape: {matrix.shape}")
 
@@ -181,7 +181,6 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name):
     }
 
     # Evaluation
-    k_ndcg = 10
     print(f"Evaluating Recommender (NDCG@{k_ndcg})...")
 
     ndcg_scores = calculate_ndcg_scores(matrix, prediction_matrix, k=k_ndcg)
@@ -200,7 +199,7 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name):
 
     # Item Coverage Evaluation
     cov_count, cov_ratio = calculate_item_coverage(
-        prediction_matrix, matrix, item_ids, k=10
+        prediction_matrix, matrix, item_ids, k=k_ndcg
     )
     # Use Coverage as the main metric
     results["Item Coverage"] = cov_ratio
@@ -248,6 +247,7 @@ def main():
         print(f"Error configuring Sushi Data: {e}")
 
     all_results = []
+    k_ndcg = 5
 
     for ds in datasets:
         try:
@@ -255,7 +255,7 @@ def main():
             matrix, user_ids, item_ids = ds["loader"]()
             gender_map = ds["gender_loader"]()
 
-            result = run_pipeline(matrix, user_ids, item_ids, gender_map, ds["name"])
+            result = run_pipeline(matrix, user_ids, item_ids, gender_map, ds["name"], k_ndcg)
             all_results.append(result)
 
         except FileNotFoundError:
@@ -273,7 +273,7 @@ def main():
         "Dataset",
         "Users",
         "Items",
-        "NDCG@10",
+        f"NDCG@{k_ndcg}",
         "Unfairness Gap",
         "Item Coverage",
     ]
@@ -293,7 +293,7 @@ def main():
         # Format item coverage as decimal 0-1
         cov_str = f"{res['Item Coverage']:.4f}"
 
-        row = f"{res['Dataset']:<15} | {res['Users']:<8} | {res['Items']:<8} | {res[f'NDCG@10']:.4f}     | {ug_str:<15} | {cov_str:<15}"
+        row = f"{res['Dataset']:<15} | {res['Users']:<8} | {res['Items']:<8} | {res[f'NDCG@{k_ndcg}']:.4f}     | {ug_str:<15} | {cov_str:<15}"
         print(row)
     print("=" * 90)
 
