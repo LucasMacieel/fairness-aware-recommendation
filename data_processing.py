@@ -56,17 +56,28 @@ def get_movielens_gender_map():
     return gender_map
 
 
-def get_movielens_data_path():
-    """Locates the data file in data/movielens."""
+def _find_data_file(subfolder, filename):
+    """
+    Generic helper to locate data files.
+    Searches in:
+      - data/<subfolder>/<filename>
+      - ../data/<subfolder>/<filename>
+      - data/<filename> (fallback)
+    """
     possible_paths = [
-        os.path.join("data", "movielens", "u.data"),
-        os.path.join("..", "data", "movielens", "u.data"),
-        os.path.join("data", "u.data"),  # Fallback
+        os.path.join("data", subfolder, filename),
+        os.path.join("..", "data", subfolder, filename),
+        os.path.join("data", filename),
     ]
     for path in possible_paths:
         if os.path.exists(path):
             return path
     return None
+
+
+def get_movielens_data_path():
+    """Locates the data file in data/movielens."""
+    return _find_data_file("movielens", "u.data")
 
 
 def get_movielens_data_numpy():
@@ -86,14 +97,7 @@ def get_movielens_data_numpy():
 
 def get_post_data_path(filename):
     """Locates files in the data/post directory."""
-    possible_paths = [
-        os.path.join("data", "post", filename),
-        os.path.join("..", "data", "post", filename),
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    return None
+    return _find_data_file("post", filename)
 
 
 def get_post_data_numpy():
@@ -157,14 +161,7 @@ def get_post_gender_map():
 
 def get_sushi_data_path(filename):
     """Locates files in the data/sushi directory."""
-    possible_paths = [
-        os.path.join("data", "sushi", filename),
-        os.path.join("..", "data", "sushi", filename),
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    return None
+    return _find_data_file("sushi", filename)
 
 
 def get_sushi_data_numpy():
