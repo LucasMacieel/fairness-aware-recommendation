@@ -1,6 +1,7 @@
 
 import numpy as np
 import random
+import pandas as pd
 from data_processing import (
     get_movielens_data_numpy,
     get_movielens_gender_map,
@@ -11,8 +12,8 @@ from data_processing import (
 )
 from metrics import (
     calculate_ndcg_scores,
-    calculate_mean_ndcg,
-    calculate_unfairness_gap,
+    calculate_mdcg,
+    calculate_gender_gap,
     calculate_item_coverage
 )
 from recommender import perform_svd
@@ -45,32 +46,32 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
     print(f"\nEvaluating Baseline Recommender (NDCG@{k_ndcg})...")
     
     baseline_ndcg_scores = calculate_ndcg_scores(matrix, prediction_matrix, k=k_ndcg)
-    baseline_mean_ndcg = calculate_mean_ndcg(baseline_ndcg_scores)
+    baseline_mdcg = calculate_mdcg(baseline_ndcg_scores)
     
     # Fairness
     if gender_map:
-        baseline_gap = calculate_unfairness_gap(baseline_ndcg_scores, user_ids, gender_map)
+        baseline_gender_gap = calculate_gender_gap(baseline_ndcg_scores, user_ids, gender_map)
     else:
-        baseline_gap = 0.0 # Default if no map
+        baseline_gender_gap = 0.0 # Default if no map
         
     # Item Coverage
     # calculate_item_coverage expects prediction_matrix to select top K.
-    baseline_cov_count, baseline_cov_ratio = calculate_item_coverage(
+    baseline_cov_count, baseline_item_coverage = calculate_item_coverage(
         prediction_matrix, matrix, item_ids, k=k_ndcg
     )
 
-    results["Baseline NDCG"] = baseline_mean_ndcg
-    results["Baseline Gap"] = baseline_gap
-    results["Baseline Coverage"] = baseline_cov_ratio
+    results["Baseline MDCG"] = baseline_mdcg
+    results["Baseline Gender Gap"] = baseline_gender_gap
+    results["Baseline Item Coverage"] = baseline_item_coverage
     
-    print(f"Baseline: NDCG={baseline_mean_ndcg:.4f}, Gap={baseline_gap:.4f}, Cov={baseline_cov_ratio:.4f}")
+    print(f"Baseline: MDCG={baseline_mdcg:.4f}, Gender Gap={baseline_gender_gap:.4f}, Item Coverage={baseline_item_coverage:.4f}")
 
     # --- Genetic Algorithm ---
     print(f"\nRunning Genetic Algorithm for {dataset_name}...")
     
     num_users, num_items = matrix.shape
     CANDIDATE_SIZE = 100
-    weights = {'ndcg': 1.0, 'gap': 1.0, 'coverage': 1.0}
+    weights = {'mdcg': 1.0, 'gender_gap': 1.0, 'item_coverage': 1.0}
     POP_SIZE = 10
     GENERATIONS = 5
     
@@ -106,13 +107,13 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
     
     best_ind, history = ga.run(generations=GENERATIONS, pop_size=POP_SIZE)
     
-    final_score, ga_ndcg, ga_gap, ga_cov = ga.fitness(best_ind)
+    final_score, ga_mdcg, ga_gender_gap, ga_item_coverage = ga.fitness(best_ind)
     
-    print(f"GA Result: NDCG={ga_ndcg:.4f}, Gap={ga_gap:.4f}, Cov={ga_cov:.4f}")
+    print(f"GA Result: MDCG={ga_mdcg:.4f}, Gender Gap={ga_gender_gap:.4f}, Item Coverage={ga_item_coverage:.4f}")
     
-    results["GA NDCG"] = ga_ndcg
-    results["GA Gap"] = ga_gap
-    results["GA Coverage"] = ga_cov
+    results["GA MDCG"] = ga_mdcg
+    results["GA Gender Gap"] = ga_gender_gap
+    results["GA Item Coverage"] = ga_item_coverage
     
     return results
 
@@ -170,39 +171,15 @@ def main():
 
         except FileNotFoundError:
             print(f"Skipping {ds['name']}: Data file not found.")
-        except Exception as e:
-            print(f"Error processing {ds['name']}: {e}")
-
-    # Print Comparison Table
-    print("\n\n" + "=" * 120)
-    print(f"{'DATASET COMPARISON (Baseline vs GA)':^120}")
-    print("=" * 120)
-
-    # Define headers
-    headers = [
-        "Dataset",
-        "NDCG (Base)", "NDCG (GA)",
-        "Gap (Base)", "Gap (GA)",
-        "Cov (Base)", "Cov (GA)"
-    ]
-
-    # Print headers
-    # Dataset | NDCG B | NDCG G | Gap B | Gap G | Cov B | Cov G
-    header_row = f"{headers[0]:<15} | {headers[1]:<10} | {headers[2]:<10} | {headers[3]:<10} | {headers[4]:<10} | {headers[5]:<10} | {headers[6]:<10}"
-    print(header_row)
-    print("-" * len(header_row))
-
-    # Print rows
-    for res in all_results:
-        # Format metrics
-        row = (
-            f"{res['Dataset']:<15} | "
-            f"{res['Baseline NDCG']:.4f}     | {res['GA NDCG']:.4f}     | "
-            f"{res['Baseline Gap']:.4f}     | {res['GA Gap']:.4f}     | "
-            f"{res['Baseline Coverage']:.4f}     | {res['GA Coverage']:.4f}"
-        )
-        print(row)
-    print("=" * 120)
+    # Display Results as Pandas DataFrame
+    if all_results:
+        df = pd.DataFrame(all_results)
+        
+        print("\n\n" + "=" * 130)
+        print(f"{'DATASET COMPARISON (Baseline vs GA)':^130}")
+        print("=" * 130)
+        print(df)
+        print("=" * 130)
 
 
 if __name__ == "__main__":

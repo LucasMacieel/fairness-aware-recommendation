@@ -46,13 +46,13 @@ def calculate_ndcg_scores(original_matrix, prediction_matrix, k=20):
     return ndcg_scores
 
 
-def calculate_mean_ndcg(ndcg_scores):
+def calculate_mdcg(ndcg_scores):
     return np.mean(ndcg_scores)
 
 
-def calculate_unfairness_gap(ndcg_scores, user_ids, gender_map):
+def calculate_gender_gap(ndcg_scores, user_ids, gender_map):
     """
-    Calculates the Unfairness Gap between Male and Female users using NDCG.
+    Calculates the Gender Gap between Male and Female users using NDCG.
     Gap = |Avg(NDCG_M) - Avg(NDCG_F)|
     """
     male_scores = []
@@ -75,8 +75,8 @@ def calculate_unfairness_gap(ndcg_scores, user_ids, gender_map):
         f"Fairness Analysis: Male Avg: {avg_male:.4f} (n={len(male_scores)}), Female Avg: {avg_female:.4f} (n={len(female_scores)})"
     )
 
-    gap = abs(avg_male - avg_female)
-    return gap
+    gender_gap = abs(avg_male - avg_female)
+    return gender_gap
 
 
 def calculate_item_coverage(prediction_matrix, original_matrix, item_ids, k=10):

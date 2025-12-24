@@ -1,12 +1,10 @@
 import numpy as np
-import random
 import copy
-from metrics import calculate_mean_ndcg, calculate_unfairness_gap, calculate_item_coverage, ndcg_at_k
 
 class GeneticRecommender:
     def __init__(self, num_users, num_items, candidate_lists, target_matrix, 
                  gender_map, item_ids,
-                 weights={'ndcg': 1.0, 'gap': 1.0, 'coverage': 1.0},
+                 weights={'mdcg': 1.0, 'gender_gap': 1.0, 'item_coverage': 1.0},
                  top_k=10):
         """
         candidate_lists: np.array of shape (num_users, M), where M > k.
@@ -83,9 +81,9 @@ class GeneticRecommender:
             
             ndcg_scores.append(ndcg)
 
-        mean_ndcg = np.mean(ndcg_scores)
+        mean_mdcg = np.mean(ndcg_scores)
         
-        # 2. Unfairness Gap
+        # 2. Gender Gap
         # We need the actual NDCG/DCG values to calculate the gap.
         male_scores = []
         female_scores = []
@@ -98,19 +96,19 @@ class GeneticRecommender:
         
         avg_m = np.mean(male_scores) if male_scores else 0
         avg_f = np.mean(female_scores) if female_scores else 0
-        gap = abs(avg_m - avg_f)
+        gender_gap = abs(avg_m - avg_f)
         
         # 3. Item Coverage
         # Count unique item indices in the top K of all users
         unique_items = set(recs_indices.flatten())
         cov_count = len(unique_items)
-        cov_ratio = cov_count / self.num_items
+        item_coverage = cov_count / self.num_items
         
-        score = (self.weights['ndcg'] * mean_ndcg) - \
-                (self.weights['gap'] * gap) + \
-                (self.weights['coverage'] * cov_ratio)
+        score = (self.weights['mdcg'] * mean_mdcg) - \
+                (self.weights['gender_gap'] * gender_gap) + \
+                (self.weights['item_coverage'] * item_coverage)
                 
-        return score, mean_ndcg, gap, cov_ratio
+        return score, mean_mdcg, gender_gap, item_coverage
 
     def crossover(self, parent1, parent2):
         """
@@ -144,26 +142,9 @@ class GeneticRecommender:
         # Copy segments
         c1[start:end] = p1[start:end]
         c2[start:end] = p2[start:end]
-        
-        # Build mapping dictionaries for the segment
-        # mapping1: maps value in p2_segment -> value in p1_segment (for C1 conflict resolution)
-        # mapping2: maps value in p1_segment -> value in p2_segment (for C2 conflict resolution)
-        
-        # We need to resolve conflicts for elements outside the segment
-        # Get elements in the segments to check existence efficiently
+
         p1_seg_set = set(p1[start:end])
         p2_seg_set = set(p2[start:end])
-        
-        # Prepare efficient lookup for positions in p2 and p1 within the window is tricky due to duplicates in logic (chains)
-        # But here we have perms, so unique elements.
-        
-        # Map: value -> index in the ORIGINAL parents? 
-        # Actually standard PMX logic involves looking up the mapping cycle.
-        # simpler:
-        # For child1: we want to fill c1[i] = p2[i]. 
-        # If p2[i] is already in c1 (i.e. in p1[start:end]), we find what p2[i] maps to.
-        # p2[i] is at some index k in P2 (specifically i).
-        # We look at P1[i]... no, strictly: we look at where p2[i] is in the segment of P1.
         
         # Let's map value -> index in segment P1
         p1_seg_map = {val: idx for idx, val in enumerate(p1[start:end])}
@@ -177,18 +158,6 @@ class GeneticRecommender:
             candidate = p2[i]
             
             while candidate in p1_seg_set:
-                # Find the position of 'candidate' in P1's segment
-                # In relative coordinates of the segment slicing
-                # We need the value in P2 at that SAME relative position
-                
-                # Rel position in segment
-                # Where is candidate in p1[start:end]?
-                # We can use a map or np.where
-                
-                # Using the dict approach
-                # We used `enumerate` on p1[start:end], so indices are 0..(end-start-1)
-                # But we need to look up p2[start:end] at that index.
-                
                 rel_idx = p1_seg_map[candidate]
                 candidate = p2[start + rel_idx]
                 
@@ -215,8 +184,6 @@ class GeneticRecommender:
         Swap Mutation.
         For each user, with prob mutation_rate, swap two items in their list.
         """
-        # Vectorized mutation decision?
-        # Iterating might be slow but safe for permutations.
         
         # Optimization: Only mutate some users
         num_mutations = int(self.num_users * mutation_rate)
@@ -226,10 +193,6 @@ class GeneticRecommender:
         users_to_mutate = np.random.choice(self.num_users, num_mutations, replace=False)
         
         for u in users_to_mutate:
-            # Swap a random item in Top-K with one in the rest of the list (Rest-M)
-            # OR just swap any two items.
-            # To be effective for re-ranking, we usually want to bring something from "below" into "top-k".
-            
             idx1 = np.random.randint(0, self.top_k)
             idx2 = np.random.randint(0, self.candidate_len)
             
@@ -280,7 +243,7 @@ class GeneticRecommender:
             best_idx = np.argmax(scores)
             
             current_best_ind = population[best_idx]
-            current_best_metrics = fitness_results[best_idx] #(score, ndcg, gap, cov)
+            current_best_metrics = fitness_results[best_idx] #(score, mdcg, gender_gap, item_coverage)
             
             if max_score > best_score:
                 best_score = max_score
@@ -288,7 +251,7 @@ class GeneticRecommender:
             
             history.append(current_best_metrics)
             
-            print(f"Gen {gen}: Best Score={max_score:.4f}, NDCG={current_best_metrics[1]:.4f}, Gap={current_best_metrics[2]:.4f}, Cov={current_best_metrics[3]:.4f}")
+            print(f"Gen {gen}: Best Score={max_score:.4f}, MDCG={current_best_metrics[1]:.4f}, Gender Gap={current_best_metrics[2]:.4f}, Item Coverage={current_best_metrics[3]:.4f}")
             
             # Selection
             selected_pop = self.select(population, fitness_results)
