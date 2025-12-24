@@ -7,7 +7,6 @@ def load_data(filepath):
     Expected format: UserID::MovieID::Rating::Timestamp
     """
     column_names = ["user_id", "item_id", "rating", "timestamp"]
-    # Load with :: separator (MovieLens 1M)
     df = pd.read_csv(filepath, sep="::", names=column_names, engine='python')
     return df
 
@@ -39,7 +38,6 @@ def get_movielens_gender_map():
     if not data_path:
         return {}
 
-    # Check for users.dat (1M)
     base_dir = os.path.dirname(data_path)
     user_file_path_1m = os.path.join(base_dir, "users.dat")
 
@@ -78,7 +76,6 @@ def _find_data_file(subfolder, filename):
 
 def get_movielens_data_path():
     """Locates the data file in data/movielens."""
-    # MovieLens 1M
     return _find_data_file("movielens", "ratings.dat")
 
 
