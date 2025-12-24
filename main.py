@@ -9,6 +9,8 @@ from data_processing import (
     get_post_gender_map,
     get_sushi_data_numpy,
     get_sushi_gender_map,
+    get_electronics_data_numpy,
+    get_electronics_gender_map,
 )
 from metrics import (
     calculate_ndcg_scores,
@@ -156,6 +158,18 @@ def main():
         )
     except Exception as e:
         print(f"Error configuring Sushi Data: {e}")
+
+    # 4. Electronics Data
+    try:
+        datasets.append(
+            {
+                "name": "Electronics Data",
+                "loader": get_electronics_data_numpy,
+                "gender_loader": get_electronics_gender_map,
+            }
+        )
+    except Exception as e:
+        print(f"Error configuring Electronics Data: {e}")
 
     all_results = []
     k_ndcg = 10

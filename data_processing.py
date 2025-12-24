@@ -1,8 +1,6 @@
 import pandas as pd
 import os
 import numpy as np
-
-
 def load_data(filepath):
     """
     Loads MovieLens 1M data from the specified filepath.
@@ -98,7 +96,6 @@ def get_movielens_data_numpy():
 
     return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
 
-
 def get_post_data_path(filename):
     """Locates files in the data/post directory."""
     return _find_data_file("post", filename)
@@ -135,7 +132,6 @@ def get_post_data_numpy():
 
     return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
 
-
 def get_post_gender_map():
     """
     Parses data/post/user_data.csv to create a mapping of user_id to gender.
@@ -166,6 +162,69 @@ def get_post_gender_map():
 def get_sushi_data_path(filename):
     """Locates files in the data/sushi directory."""
     return _find_data_file("sushi", filename)
+
+
+def get_electronics_data_path():
+    """Locates the data file in data/electronics."""
+    return _find_data_file("electronics", "df_electronics.csv")
+
+
+def get_electronics_data_numpy():
+    """
+    Returns the user-item rating matrix as a numpy array from data/electronics.
+    """
+    data_path = get_electronics_data_path()
+    if not data_path:
+        raise FileNotFoundError("Electronics data file not found.")
+
+    df = pd.read_csv(data_path)
+    # Ensure columns exist (they match our convention)
+    # Filter only necessary columns to avoid overhead
+    df = df[["user_id", "item_id", "rating"]]
+    
+    # Filter to top N active users to avoid OOM (1M+ users in original file)
+    # Target roughly 5000 users for manageable matrix size
+    top_users = df["user_id"].value_counts().head(5000).index
+    df = df[df["user_id"].isin(top_users)]
+
+    # We can reuse the generic create_user_item_matrix if it fits
+    # But we need to handle duplicates if any. Let's strictly drop duplicates.
+    df = df.drop_duplicates(subset=["user_id", "item_id"])
+    
+    matrix_df = create_user_item_matrix(df)
+
+    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+
+def get_electronics_gender_map():
+    """
+    Parses data/electronics/df_electronics.csv to create a mapping of user_id to gender.
+    The column is 'user_attr'.
+    Returns:
+        dict: {user_id: gender (M/F)}
+    """
+    data_path = get_electronics_data_path()
+    if not data_path:
+        return {}
+
+    df = pd.read_csv(data_path, usecols=["user_id", "user_attr"])
+    
+    # Drop rows with missing gender
+    df = df.dropna(subset=["user_attr"])
+    
+    gender_map = {}
+    # Iterate. Note: A user might appear multiple times. We take the first valid one or all should be same.
+    # Let's drop duplicates on user_id to speed up
+    df_unique = df.drop_duplicates(subset=["user_id"])
+    
+    for _, row in df_unique.iterrows():
+        uid = row["user_id"]
+        g = str(row["user_attr"]).strip().lower()
+        if g == "female":
+            gender_map[uid] = "F"
+        elif g == "male":
+            gender_map[uid] = "M"
+            
+    return gender_map
 
 
 def get_sushi_data_numpy():
@@ -205,7 +264,6 @@ def get_sushi_data_numpy():
     item_ids = list(range(matrix.shape[1]))
 
     return final_matrix, user_ids, item_ids
-
 
 def get_sushi_gender_map():
     """
