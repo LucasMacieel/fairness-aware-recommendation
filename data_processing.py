@@ -5,11 +5,12 @@ import numpy as np
 
 def load_data(filepath):
     """
-    Loads MovieLens data from the specified filepath.
-    Expected format: user id | item id | rating | timestamp
+    Loads MovieLens 1M data from the specified filepath.
+    Expected format: UserID::MovieID::Rating::Timestamp
     """
     column_names = ["user_id", "item_id", "rating", "timestamp"]
-    df = pd.read_csv(filepath, sep="\t", names=column_names)
+    # Load with :: separator (MovieLens 1M)
+    df = pd.read_csv(filepath, sep="::", names=column_names, engine='python')
     return df
 
 
@@ -32,7 +33,7 @@ def create_user_item_matrix(df):
 
 def get_movielens_gender_map():
     """
-    Parses u.user to create a mapping of user_id to gender.
+    Parses users.dat to create a mapping of user_id to gender.
     Returns:
         dict: {user_id: gender (M/F)}
     """
@@ -40,18 +41,20 @@ def get_movielens_gender_map():
     if not data_path:
         return {}
 
-    user_file_path = os.path.join(os.path.dirname(data_path), "u.user")
-    if not os.path.exists(user_file_path):
-        return {}
+    # Check for users.dat (1M)
+    base_dir = os.path.dirname(data_path)
+    user_file_path_1m = os.path.join(base_dir, "users.dat")
 
     gender_map = {}
-    with open(user_file_path, "r") as f:
-        for line in f:
-            parts = line.strip().split("|")
-            if len(parts) >= 3:
-                user_id = int(parts[0])
-                gender = parts[2]
-                gender_map[user_id] = gender
+    
+    if os.path.exists(user_file_path_1m):
+        with open(user_file_path_1m, "r", encoding='ISO-8859-1') as f:
+            for line in f:
+                parts = line.strip().split("::")
+                if len(parts) >= 2:
+                    user_id = int(parts[0])
+                    gender = parts[1]
+                    gender_map[user_id] = gender
 
     return gender_map
 
@@ -77,7 +80,8 @@ def _find_data_file(subfolder, filename):
 
 def get_movielens_data_path():
     """Locates the data file in data/movielens."""
-    return _find_data_file("movielens", "u.data")
+    # MovieLens 1M
+    return _find_data_file("movielens", "ratings.dat")
 
 
 def get_movielens_data_numpy():
