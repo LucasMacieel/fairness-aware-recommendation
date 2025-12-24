@@ -281,3 +281,240 @@ class GeneticRecommender:
             population = next_pop
 
         return best_overall, history
+
+
+class NsgaIIRecommender(GeneticRecommender):
+    def __init__(self, num_users, num_items, candidate_lists, target_matrix, 
+                 gender_map, item_ids,
+                 weights={'mdcg': 1.0, 'gender_gap': 1.0, 'item_coverage': 1.0},
+                 top_k=10):
+        super().__init__(num_users, num_items, candidate_lists, target_matrix, 
+                 gender_map, item_ids, weights, top_k)
+
+    def fast_non_dominated_sort(self, population_metrics):
+        """
+        Sorts the population into fronts.
+        population_metrics: list of tuples (score, mdcg, gender_gap, item_coverage)
+        We want to:
+         - Maximize MDCG -> Minimize -MDCG
+         - Minimize Gender Gap
+         - Maximize Item Coverage -> Minimize -Item Coverage
+        """
+        pop_size = len(population_metrics)
+        S = [[] for _ in range(pop_size)]
+        n = [0] * pop_size
+        rank = [0] * pop_size
+        fronts = [[]]
+
+        # Convert to minimization problem
+        objectives = []
+        for m in population_metrics:
+            # m = (score, mdcg, gender_gap, item_coverage)
+            # Obj 1: -MDCG
+            # Obj 2: Gender Gap
+            # Obj 3: -Item Coverage
+            objectives.append([-m[1], m[2], -m[3]])
+        
+        objectives = np.array(objectives)
+
+        for p in range(pop_size):
+            p_obj = objectives[p]
+            for q in range(pop_size):
+                if p == q: 
+                    continue
+                q_obj = objectives[q]
+                
+                # Check domination
+                # p dominates q if p <= q for all obj AND p < q for at least one
+                diff = p_obj - q_obj
+                if np.all(diff <= 0) and np.any(diff < 0):
+                    S[p].append(q)
+                elif np.all(diff >= 0) and np.any(diff > 0):
+                    n[p] += 1
+            
+            if n[p] == 0:
+                rank[p] = 0
+                fronts[0].append(p)
+        
+        i = 0
+        while i < len(fronts):
+            current_front = fronts[i]
+            if not current_front:
+                break
+            
+            next_front = []
+            for p in current_front:
+                for q in S[p]:
+                    n[q] -= 1
+                    if n[q] == 0:
+                        rank[q] = i + 1
+                        next_front.append(q)
+            
+            if next_front:
+                fronts.append(next_front)
+            i += 1
+            
+        return fronts, rank
+
+    def calculate_crowding_distance(self, front, population_metrics):
+        """
+        Calculates crowding distance for individuals in a front.
+        """
+        l = len(front)
+        distances = {idx: 0.0 for idx in front}
+        
+        if l == 0:
+            return distances
+            
+        # We need actual values for crowding distance calculation, unscaled
+        metrics_array = np.array([ [m[1], m[2], m[3]] for m in population_metrics ])
+        
+        # For each objective
+        for m in range(3): # 3 objectives
+            # Sort front by this objective
+            sorted_front = sorted(front, key=lambda x: metrics_array[x][m])
+            
+            distances[sorted_front[0]] = np.inf
+            distances[sorted_front[-1]] = np.inf
+            
+            obj_min = metrics_array[sorted_front[0]][m]
+            obj_max = metrics_array[sorted_front[-1]][m]
+            
+            if obj_max - obj_min == 0:
+                continue
+                
+            for i in range(1, l - 1):
+                distances[sorted_front[i]] += (metrics_array[sorted_front[i+1]][m] - metrics_array[sorted_front[i-1]][m]) / (obj_max - obj_min)
+                
+        return distances
+
+    def nsga_selection(self, population, ranks, crowding_dists):
+        """
+        Binary Tournament Selection based on Rank and Crowding Distance
+        """
+        selected = []
+        pop_len = len(population)
+        
+        for _ in range(pop_len):
+            idx1 = np.random.randint(0, pop_len)
+            idx2 = np.random.randint(0, pop_len)
+            
+            # Crowded Comparison Operator
+            # Prefer lower rank
+            if ranks[idx1] < ranks[idx2]:
+                winner = idx1
+            elif ranks[idx2] < ranks[idx1]:
+                winner = idx2
+            else:
+                # If ranks equal, prefer higher crowding distance
+                if crowding_dists[idx1] > crowding_dists[idx2]:
+                    winner = idx1
+                else:
+                    winner = idx2
+            
+            selected.append(population[winner])
+            
+        return selected
+
+    def run(self, generations=10, pop_size=20, crossover_rate=0.8, mutation_rate=0.1):
+        print(f"Starting NSGA-II Evolution: Pop={pop_size}, Gens={generations}")
+        
+        population = self.initialize_population(pop_size)
+        
+        # Initial Evaluate
+        fitness_results = [self.fitness(ind) for ind in population]
+        
+        # Initial Sort
+        fronts, ranks = self.fast_non_dominated_sort(fitness_results)
+        
+        # Calculate Crowding Distance for global tracking (needed for selection)
+        crowding_dists = {}
+        for front in fronts:
+            cd = self.calculate_crowding_distance(front, fitness_results)
+            crowding_dists.update(cd)
+
+        history = []
+        
+        for gen in range(generations):
+            # 1. Selection
+            # We select parents to create offspring
+            mating_pool = self.nsga_selection(population, ranks, crowding_dists)
+            
+            # 2. Reproduction to create Q_t
+            offspring_pop = []
+            while len(offspring_pop) < pop_size:
+                p1 = mating_pool[np.random.randint(len(mating_pool))]
+                p2 = mating_pool[np.random.randint(len(mating_pool))]
+                
+                if np.random.rand() < crossover_rate:
+                    c1, c2 = self.crossover(p1, p2)
+                else:
+                    c1, c2 = p1.copy(), p2.copy()
+                    
+                c1 = self.mutate(c1, mutation_rate)
+                c2 = self.mutate(c2, mutation_rate)
+                
+                offspring_pop.append(c1)
+                if len(offspring_pop) < pop_size:
+                    offspring_pop.append(c2)
+            
+            # 3. Combine R_t = P_t + Q_t
+            combined_pop = population + offspring_pop
+            
+            # Evaluate all
+            combined_fitness = [self.fitness(ind) for ind in combined_pop]
+            
+            # 4. Non-Dominated Sort of R_t
+            fronts, ranks_combined = self.fast_non_dominated_sort(combined_fitness)
+            
+            # 5. Create next P_{t+1}
+            next_pop = []
+            next_fitness = []
+            i = 0
+            
+            while len(next_pop) + len(fronts[i]) <= pop_size:
+                # Add entire front
+                for idx in fronts[i]:
+                    next_pop.append(combined_pop[idx])
+                    next_fitness.append(combined_fitness[idx])
+                i += 1
+                if i >= len(fronts):
+                    break
+            
+            # If we still need individuals, sort the current front by crowding distance
+            if len(next_pop) < pop_size and i < len(fronts):
+                current_front = fronts[i]
+                cd = self.calculate_crowding_distance(current_front, combined_fitness)
+                
+                # Sort indices by CD descending
+                current_front_sorted = sorted(current_front, key=lambda x: cd[x], reverse=True)
+                
+                fill_count = pop_size - len(next_pop)
+                for j in range(fill_count):
+                    idx = current_front_sorted[j]
+                    next_pop.append(combined_pop[idx])
+                    next_fitness.append(combined_fitness[idx])
+            
+            population = next_pop
+            fitness_results = next_fitness
+            
+            # Re-rank for next selection (optional if we re-calc at top of loop, but let's update state)
+            fronts, ranks = self.fast_non_dominated_sort(fitness_results)
+            crowding_dists = {}
+            for front in fronts:
+                cd = self.calculate_crowding_distance(front, fitness_results)
+                crowding_dists.update(cd)
+            
+            # Log best "weighted score" individual for tracking
+            scores = [f[0] for f in fitness_results]
+            best_idx = np.argmax(scores)
+            current_best_metrics = fitness_results[best_idx]
+            history.append(current_best_metrics)
+            
+            print(f"Gen {gen} (NSGA-II): Best Weighted Score={current_best_metrics[0]:.4f}, MDCG={current_best_metrics[1]:.4f}, Gap={current_best_metrics[2]:.4f}, Cov={current_best_metrics[3]:.4f}")
+
+        # Return the Pareto Front (Rank 0)
+        pareto_front_indices = fronts[0]
+        pareto_population = [population[i] for i in pareto_front_indices]
+        
+        return pareto_population, history

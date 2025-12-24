@@ -19,7 +19,7 @@ from metrics import (
     calculate_item_coverage
 )
 from recommender import perform_svd
-from genetic_recommender import GeneticRecommender
+from genetic_recommender import GeneticRecommender, NsgaIIRecommender
 
 # Set random seed for reproducibility
 SEED = 42
@@ -116,7 +116,43 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
     results["GA MDCG"] = ga_mdcg
     results["GA Gender Gap"] = ga_gender_gap
     results["GA Item Coverage"] = ga_item_coverage
+
+    # --- NSGA-II Algorithm ---
+    print(f"\nRunning NSGA-II for {dataset_name}...")
     
+    nsga = NsgaIIRecommender(
+        num_users=num_users, 
+        num_items=num_items, 
+        candidate_lists=candidate_lists, 
+        target_matrix=matrix, 
+        gender_map=ga_gender_map, 
+        item_ids=range(num_users),
+        weights=weights,
+        top_k=k_ndcg
+    )
+    
+    # NSGA-II returns a population (Pareto front)
+    pareto_front, history_nsga = nsga.run(generations=GENERATIONS, pop_size=POP_SIZE)
+    
+    # Select best solution from Pareto front based on the same weighted score for fair comparison
+    best_nsga_score = -np.inf
+    best_nsga_ind = None
+    best_nsga_metrics = None
+    
+    for ind in pareto_front:
+        score, mdcg, gap, cov = nsga.fitness(ind)
+        if score > best_nsga_score:
+            best_nsga_score = score
+            best_nsga_ind = ind
+            best_nsga_metrics = (score, mdcg, gap, cov)
+            
+    print(f"NSGA-II Result (Best Weighted): MDCG={best_nsga_metrics[1]:.4f}, Gender Gap={best_nsga_metrics[2]:.4f}, Item Coverage={best_nsga_metrics[3]:.4f}")
+    
+    results["NSGA-II MDCG"] = best_nsga_metrics[1]
+    results["NSGA-II Gender Gap"] = best_nsga_metrics[2]
+    results["NSGA-II Item Coverage"] = best_nsga_metrics[3]
+    
+
     return results
 
 
@@ -192,7 +228,7 @@ def main():
         print("\n\n" + "=" * 130)
         print(f"{'DATASET COMPARISON (Baseline vs GA)':^130}")
         print("=" * 130)
-        print(df)
+        print(df.to_string())
         print("=" * 130)
 
 
