@@ -227,7 +227,7 @@ def main():
     data_path = get_movielens_data_path()
 
     if not data_path:
-        print(f"Error: Data file not found.")
+        print("Error: Data file not found.")
         return
 
     print(f"Loading data from: {data_path}")

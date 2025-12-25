@@ -11,9 +11,9 @@ from data_processing import (
 )
 from metrics import (
     calculate_ndcg_scores,
-    calculate_mdcg,
     calculate_gender_gap,
     calculate_item_coverage,
+    get_user_ideal_dcg,
 )
 from recommender import perform_svd
 from genetic_recommender import GeneticRecommender, NsgaIIRecommender
@@ -43,11 +43,15 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
         "Items": matrix.shape[1],
     }
 
+    # --- Pre-calculate Global IDCG for Consistency ---
+    print(f"Calculating Global IDCG for k={k_ndcg}...")
+    user_idcg_scores = get_user_ideal_dcg(matrix, k=k_ndcg)
+
     # --- Baseline Evaluation ---
     print(f"\nEvaluating Baseline Recommender (NDCG@{k_ndcg})...")
 
     baseline_ndcg_scores = calculate_ndcg_scores(matrix, prediction_matrix, k=k_ndcg)
-    baseline_mdcg = calculate_mdcg(baseline_ndcg_scores)
+    baseline_mdcg = np.mean(baseline_ndcg_scores)
 
     # Fairness
     if gender_map:
@@ -59,8 +63,10 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
 
     # Item Coverage
     # calculate_item_coverage expects prediction_matrix to select top K.
+    # We set filter_rated=False to allow checking coverage on ALL items (Reconstruction task),
+    # matching the GA's behavior which has access to ground truth.
     baseline_cov_count, baseline_item_coverage = calculate_item_coverage(
-        prediction_matrix, matrix, item_ids, k=k_ndcg
+        prediction_matrix, matrix, item_ids, k=k_ndcg, filter_rated=False
     )
 
     results["Baseline MDCG"] = baseline_mdcg
@@ -77,8 +83,8 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
     num_users, num_items = matrix.shape
     CANDIDATE_SIZE = 100
     weights = {"mdcg": 1.0, "gender_gap": 1.0, "item_coverage": 1.0}
-    POP_SIZE = 10
-    GENERATIONS = 5
+    POP_SIZE = 50
+    GENERATIONS = 15
 
     # Generate Candidate Lists
     print(f"Generating Top-{CANDIDATE_SIZE} candidates...")
@@ -111,6 +117,8 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
         weights=weights,
         top_k=k_ndcg,
     )
+    # INJECT GLOBAL IDCG
+    ga.set_user_idcg_values(user_idcg_scores)
 
     best_ind, history = ga.run(generations=GENERATIONS, pop_size=POP_SIZE)
 
@@ -137,6 +145,8 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
         weights=weights,
         top_k=k_ndcg,
     )
+    # INJECT GLOBAL IDCG
+    nsga.set_user_idcg_values(user_idcg_scores)
 
     # NSGA-II returns a population (Pareto front)
     pareto_front, history_nsga = nsga.run(generations=GENERATIONS, pop_size=POP_SIZE)
@@ -151,14 +161,12 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
 
     # Select best solution from Pareto front based on the same weighted score for fair comparison
     best_nsga_score = -np.inf
-    best_nsga_ind = None
     best_nsga_metrics = None
 
     for ind in pareto_front:
         score, mdcg, gap, cov = nsga.fitness(ind)
         if score > best_nsga_score:
             best_nsga_score = score
-            best_nsga_ind = ind
             best_nsga_metrics = (score, mdcg, gap, cov)
 
     print(
@@ -199,7 +207,7 @@ def main():
     except Exception as e:
         print(f"Error configuring Post Data: {e}")
 
-    # 4. Electronics Data
+    # 3. Electronics Data
     try:
         datasets.append(
             {

@@ -1,5 +1,5 @@
-
 import numpy as np
+
 
 def dcg_at_k(r, k):
     """
@@ -46,10 +46,6 @@ def calculate_ndcg_scores(original_matrix, prediction_matrix, k=20):
     return ndcg_scores
 
 
-def calculate_mdcg(ndcg_scores):
-    return np.mean(ndcg_scores)
-
-
 def calculate_gender_gap(ndcg_scores, user_ids, gender_map):
     """
     Calculates the Gender Gap between Male and Female users using NDCG.
@@ -79,11 +75,16 @@ def calculate_gender_gap(ndcg_scores, user_ids, gender_map):
     return gender_gap
 
 
-def calculate_item_coverage(prediction_matrix, original_matrix, item_ids, k=10):
+def calculate_item_coverage(
+    prediction_matrix, original_matrix, item_ids, k=10, filter_rated=True
+):
     """
     Calculates the Item Coverage.
     Formula: | U_{u in U} L_N(u) |
     (Cardinality of the set of unique items recommended across all users).
+
+    filter_rated: If True, only considers items with 0 rating in original_matrix.
+                  If False, considers all items (Oracular/Reconstruction setting).
     """
     unique_recommended_items = set()
     num_users = original_matrix.shape[0]
@@ -92,19 +93,25 @@ def calculate_item_coverage(prediction_matrix, original_matrix, item_ids, k=10):
         user_predictions = prediction_matrix[user_idx]
         user_original_ratings = original_matrix[user_idx]
 
-        # Filter unrated
-        unrated_indices = np.where(user_original_ratings == 0)[0]
-        unrated_scores = user_predictions[unrated_indices]
+        if filter_rated:
+            # Filter unrated
+            unrated_indices = np.where(user_original_ratings == 0)[0]
+            candidate_scores = user_predictions[unrated_indices]
+            original_indices_map = unrated_indices
+        else:
+            # Consider all items
+            candidate_scores = user_predictions
+            original_indices_map = np.arange(len(user_predictions))
 
-        if len(unrated_scores) == 0:
+        if len(candidate_scores) == 0:
             continue
 
         # Get top K indices directly
-        if len(unrated_scores) >= k:
-            top_indices = np.argsort(unrated_scores)[::-1][:k]
-            top_original_indices = unrated_indices[top_indices]
+        if len(candidate_scores) >= k:
+            top_local_indices = np.argsort(candidate_scores)[::-1][:k]
+            top_original_indices = original_indices_map[top_local_indices]
         else:
-            top_original_indices = unrated_indices
+            top_original_indices = original_indices_map
 
         # Add item IDs to the set
         for idx in top_original_indices:
@@ -118,3 +125,17 @@ def calculate_item_coverage(prediction_matrix, original_matrix, item_ids, k=10):
     print(f"Item Coverage (Ratio): {coverage_ratio:.2%}")
 
     return coverage_count, coverage_ratio
+
+
+def get_user_ideal_dcg(original_matrix, k):
+    """
+    Pre-calculates the Ideal DCG (IDCG) for all users based on their ground truth ratings.
+    Used for normalizing DCG in the Genetic Algorithm to ensure consistency with Baseline NDCG.
+    """
+    idcg_scores = []
+    for user_idx in range(original_matrix.shape[0]):
+        actual_ratings = original_matrix[user_idx]
+        # Calculate IDCG based on the best possible ordering of ALL items (Global Ideal)
+        best_possible_dcg = dcg_at_k(sorted(actual_ratings, reverse=True), k)
+        idcg_scores.append(best_possible_dcg)
+    return np.array(idcg_scores)
