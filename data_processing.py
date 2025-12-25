@@ -1,13 +1,14 @@
 import pandas as pd
 import os
-import numpy as np
+
+
 def load_data(filepath):
     """
     Loads MovieLens 1M data from the specified filepath.
     Expected format: UserID::MovieID::Rating::Timestamp
     """
     column_names = ["user_id", "item_id", "rating", "timestamp"]
-    df = pd.read_csv(filepath, sep="::", names=column_names, engine='python')
+    df = pd.read_csv(filepath, sep="::", names=column_names, engine="python")
     return df
 
 
@@ -42,9 +43,9 @@ def get_movielens_gender_map():
     user_file_path_1m = os.path.join(base_dir, "users.dat")
 
     gender_map = {}
-    
+
     if os.path.exists(user_file_path_1m):
-        with open(user_file_path_1m, "r", encoding='ISO-8859-1') as f:
+        with open(user_file_path_1m, "r", encoding="ISO-8859-1") as f:
             for line in f:
                 parts = line.strip().split("::")
                 if len(parts) >= 2:
@@ -93,6 +94,7 @@ def get_movielens_data_numpy():
 
     return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
 
+
 def get_post_data_path(filename):
     """Locates files in the data/post directory."""
     return _find_data_file("post", filename)
@@ -129,6 +131,7 @@ def get_post_data_numpy():
 
     return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
 
+
 def get_post_gender_map():
     """
     Parses data/post/user_data.csv to create a mapping of user_id to gender.
@@ -156,11 +159,6 @@ def get_post_gender_map():
     return gender_map
 
 
-def get_sushi_data_path(filename):
-    """Locates files in the data/sushi directory."""
-    return _find_data_file("sushi", filename)
-
-
 def get_electronics_data_path():
     """Locates the data file in data/electronics."""
     return _find_data_file("electronics", "df_electronics.csv")
@@ -178,7 +176,7 @@ def get_electronics_data_numpy():
     # Ensure columns exist (they match our convention)
     # Filter only necessary columns to avoid overhead
     df = df[["user_id", "item_id", "rating"]]
-    
+
     # Filter to top N active users to avoid OOM (1M+ users in original file)
     # Target roughly 5000 users for manageable matrix size
     top_users = df["user_id"].value_counts().head(5000).index
@@ -187,10 +185,11 @@ def get_electronics_data_numpy():
     # We can reuse the generic create_user_item_matrix if it fits
     # But we need to handle duplicates if any. Let's strictly drop duplicates.
     df = df.drop_duplicates(subset=["user_id", "item_id"])
-    
+
     matrix_df = create_user_item_matrix(df)
 
     return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+
 
 def get_electronics_gender_map():
     """
@@ -204,15 +203,15 @@ def get_electronics_gender_map():
         return {}
 
     df = pd.read_csv(data_path, usecols=["user_id", "user_attr"])
-    
+
     # Drop rows with missing gender
     df = df.dropna(subset=["user_attr"])
-    
+
     gender_map = {}
     # Iterate. Note: A user might appear multiple times. We take the first valid one or all should be same.
     # Let's drop duplicates on user_id to speed up
     df_unique = df.drop_duplicates(subset=["user_id"])
-    
+
     for _, row in df_unique.iterrows():
         uid = row["user_id"]
         g = str(row["user_attr"]).strip().lower()
@@ -220,72 +219,6 @@ def get_electronics_gender_map():
             gender_map[uid] = "F"
         elif g == "male":
             gender_map[uid] = "M"
-            
-    return gender_map
-
-
-def get_sushi_data_numpy():
-    """
-    Returns the user-sushi rating matrix as a numpy array from data/sushi.
-    Source: sushi3b.5000.10.score
-    Original values: -1 (missing), 0-4 (ratings).
-    Transformed: 0 (missing), 1-5 (ratings).
-    """
-    score_path = get_sushi_data_path("sushi3b.5000.10.score")
-    if not score_path:
-        raise FileNotFoundError("Sushi score file not found.")
-
-    # Load dense matrix (space separated)
-    # The file has no header and is essentially already a matrix where rows=users, cols=items
-    df_matrix = pd.read_csv(score_path, sep=" ", header=None)
-
-    # Values might be read as floats if there are NaNs, but here -1 is used.
-    # Convert to numpy
-    matrix = df_matrix.values
-
-    # Transform ratings:
-    # -1 -> 0 (missing, unobserved)
-    # 0..4 -> 1..5 (observed ratings)
-
-    # Create a mask for valid ratings (>= 0)
-    valid_mask = matrix >= 0
-
-    # Initialize output matrix with 0s
-    final_matrix = np.zeros_like(matrix)
-
-    # Shift valid ratings by +1 and assign
-    final_matrix[valid_mask] = matrix[valid_mask] + 1
-
-    # Generate dummy IDs since the file is dense and sorted by ID
-    user_ids = list(range(matrix.shape[0]))
-    item_ids = list(range(matrix.shape[1]))
-
-    return final_matrix, user_ids, item_ids
-
-def get_sushi_gender_map():
-    """
-    Parses data/sushi/sushi3.udata to create a mapping of user_id to gender.
-    Returns:
-        dict: {user_index: gender (M/F)}
-    """
-    user_path = get_sushi_data_path("sushi3.udata")
-    if not user_path:
-        return {}
-
-    df_users = pd.read_csv(user_path, sep="\t", header=None)
-
-    # Col 1 is gender: 0:male, 1:female
-    gender_map = {}
-
-    for idx, row in df_users.iterrows():
-        # idx matches the matrix row index
-        gender_val = row[1]
-        if gender_val == 0:
-            gender_map[idx] = "M"
-        elif gender_val == 1:
-            gender_map[idx] = "F"
-        else:
-            gender_map[idx] = "Unknown"
 
     return gender_map
 
