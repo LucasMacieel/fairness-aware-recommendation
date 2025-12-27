@@ -2,10 +2,10 @@ import numpy as np
 import random
 import pandas as pd
 from data_processing import (
-    get_movielens_data_numpy,
-    get_movielens_gender_map,
-    get_post_data_numpy,
-    get_post_gender_map,
+    get_movielens_100k_data_numpy,
+    get_movielens_100k_gender_map,
+    get_movielens_1m_data_numpy,
+    get_movielens_1m_gender_map,
     get_electronics_data_numpy,
     get_electronics_gender_map,
 )
@@ -81,7 +81,7 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
     print(f"\nRunning Genetic Algorithm for {dataset_name}...")
 
     num_users, num_items = matrix.shape
-    CANDIDATE_SIZE = 100
+    CANDIDATE_SIZE = 50
     weights = {"mdcg": 1.0, "gender_gap": 1.0, "item_coverage": 1.0}
     POP_SIZE = 50
     GENERATIONS = 15
@@ -183,29 +183,29 @@ def run_pipeline(matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
 def main():
     datasets = []
 
-    # 1. MovieLens
+    # 1. MovieLens 100k
     try:
         datasets.append(
             {
-                "name": "MovieLens",
-                "loader": get_movielens_data_numpy,
-                "gender_loader": get_movielens_gender_map,
+                "name": "MovieLens 100k",
+                "loader": get_movielens_100k_data_numpy,
+                "gender_loader": get_movielens_100k_gender_map,
             }
         )
     except Exception as e:
-        print(f"Error configuring MovieLens: {e}")
+        print(f"Error configuring MovieLens 100k: {e}")
 
-    # 2. Post Data
+    # 2. MovieLens 1M
     try:
         datasets.append(
             {
-                "name": "Post Data",
-                "loader": get_post_data_numpy,
-                "gender_loader": get_post_gender_map,
+                "name": "MovieLens 1M",
+                "loader": get_movielens_1m_data_numpy,
+                "gender_loader": get_movielens_1m_gender_map,
             }
         )
     except Exception as e:
-        print(f"Error configuring Post Data: {e}")
+        print(f"Error configuring MovieLens 1M: {e}")
 
     # 3. Electronics Data
     try:

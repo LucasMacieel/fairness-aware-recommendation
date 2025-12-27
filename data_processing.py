@@ -4,11 +4,18 @@ import os
 
 def load_data(filepath):
     """
-    Loads MovieLens 1M data from the specified filepath.
-    Expected format: UserID::MovieID::Rating::Timestamp
+    Loads MovieLens data from the specified filepath.
+    Supports both ML-1M (ratings.dat, ::) and ML-100k (u.data, \t).
     """
     column_names = ["user_id", "item_id", "rating", "timestamp"]
-    df = pd.read_csv(filepath, sep="::", names=column_names, engine="python")
+
+    # Check for ML-100k (u.data) vs ML-1M (ratings.dat) based on filename or extension
+    if filepath.endswith("u.data"):
+        sep = "\t"
+    else:
+        sep = "::"
+
+    df = pd.read_csv(filepath, sep=sep, names=column_names, engine="python")
     return df
 
 
@@ -29,29 +36,54 @@ def create_user_item_matrix(df):
     return user_item_matrix_filled
 
 
-def get_movielens_gender_map():
+def get_movielens_100k_gender_map():
     """
-    Parses users.dat to create a mapping of user_id to gender.
-    Returns:
-        dict: {user_id: gender (M/F)}
+    Parses ml-100k/u.user for gender.
+    Format: user id | age | gender | occupation | zip code
     """
-    data_path = get_movielens_data_path()
+    data_path = get_movielens_100k_data_path()
     if not data_path:
         return {}
 
     base_dir = os.path.dirname(data_path)
-    user_file_path_1m = os.path.join(base_dir, "users.dat")
-
+    user_file = os.path.join(base_dir, "u.user")
     gender_map = {}
 
-    if os.path.exists(user_file_path_1m):
-        with open(user_file_path_1m, "r", encoding="ISO-8859-1") as f:
-            for line in f:
-                parts = line.strip().split("::")
-                if len(parts) >= 2:
-                    user_id = int(parts[0])
-                    gender = parts[1]
-                    gender_map[user_id] = gender
+    if os.path.exists(user_file):
+        try:
+            with open(user_file, "r", encoding="ISO-8859-1") as f:
+                for line in f:
+                    parts = line.strip().split("|")
+                    if len(parts) >= 3:
+                        gender_map[int(parts[0])] = parts[2]
+        except Exception:
+            pass
+
+    return gender_map
+
+
+def get_movielens_1m_gender_map():
+    """
+    Parses ml-1m/users.dat for gender.
+    Format: UserID::Gender::Age::Occupation::Zip-code
+    """
+    data_path = get_movielens_1m_data_path()
+    if not data_path:
+        return {}
+
+    base_dir = os.path.dirname(data_path)
+    user_file = os.path.join(base_dir, "users.dat")
+    gender_map = {}
+
+    if os.path.exists(user_file):
+        try:
+            with open(user_file, "r", encoding="ISO-8859-1") as f:
+                for line in f:
+                    parts = line.strip().split("::")
+                    if len(parts) >= 2:
+                        gender_map[int(parts[0])] = parts[1]
+        except Exception:
+            pass
 
     return gender_map
 
@@ -75,19 +107,37 @@ def _find_data_file(subfolder, filename):
     return None
 
 
-def get_movielens_data_path():
-    """Locates the data file in data/movielens."""
-    return _find_data_file("movielens", "ratings.dat")
+def get_movielens_100k_data_path():
+    """Locates the data file in data/ml-100k."""
+    return _find_data_file("ml-100k", "u.data")
 
 
-def get_movielens_data_numpy():
+def get_movielens_1m_data_path():
+    """Locates the data file in data/ml-1m."""
+    return _find_data_file("ml-1m", "ratings.dat")
+
+
+def get_movielens_100k_data_numpy():
     """
-    Returns the user-item matrix as a numpy array.
-    Also returns the user_ids and item_ids for mapping back.
+    Returns ML-100k user-item matrix.
     """
-    data_path = get_movielens_data_path()
+    data_path = get_movielens_100k_data_path()
     if not data_path:
-        raise FileNotFoundError("MovieLens data file not found.")
+        raise FileNotFoundError("ML-100k data file not found.")
+
+    df = load_data(data_path)
+    matrix_df = create_user_item_matrix(df)
+
+    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+
+
+def get_movielens_1m_data_numpy():
+    """
+    Returns ML-1M user-item matrix.
+    """
+    data_path = get_movielens_1m_data_path()
+    if not data_path:
+        raise FileNotFoundError("ML-1M data file not found.")
 
     df = load_data(data_path)
     matrix_df = create_user_item_matrix(df)
@@ -177,10 +227,18 @@ def get_electronics_data_numpy():
     # Filter only necessary columns to avoid overhead
     df = df[["user_id", "item_id", "rating"]]
 
-    # Filter to top N active users to avoid OOM (1M+ users in original file)
-    # Target roughly 5000 users for manageable matrix size
-    top_users = df["user_id"].value_counts().head(5000).index
-    df = df[df["user_id"].isin(top_users)]
+    # Filter to 5000 random users to avoid OOM, but maintain diversity
+    unique_users = df["user_id"].unique()
+    if len(unique_users) > 5000:
+        import numpy as np
+
+        # Set seed for reproducibility if needed, but here we just want random
+        np.random.seed(42)
+        selected_users = np.random.choice(unique_users, size=5000, replace=False)
+    else:
+        selected_users = unique_users
+
+    df = df[df["user_id"].isin(selected_users)]
 
     # We can reuse the generic create_user_item_matrix if it fits
     # But we need to handle duplicates if any. Let's strictly drop duplicates.
@@ -224,39 +282,23 @@ def get_electronics_gender_map():
 
 
 def main():
-    data_path = get_movielens_data_path()
+    print("Testing ML-100k Data Loading...")
+    try:
+        mat, u, i = get_movielens_100k_data_numpy()
+        print(f"ML-100k Shape: {mat.shape}")
+        g = get_movielens_100k_gender_map()
+        print(f"ML-100k Gender Map Size: {len(g)}")
+    except Exception as e:
+        print(e)
 
-    if not data_path:
-        print("Error: Data file not found.")
-        return
-
-    print(f"Loading data from: {data_path}")
-    df = load_data(data_path)
-    print(f"Data loaded. Shape: {df.shape}")
-    print(df.head())
-
-    print("\nCreating user-item matrix...")
-    matrix_df = create_user_item_matrix(df)
-    print(f"Matrix created. Shape: {matrix_df.shape}")
-    print("\nMatrix Head (first 5 rows and columns):")
-    print(matrix_df.iloc[:5, :5])
-
-    # Optional: verifying uniqueness
-    n_users = df["user_id"].nunique()
-    n_items = df["item_id"].nunique()
-    print(f"\nUnique Users: {n_users}")
-    print(f"Unique Items: {n_items}")
-
-    if matrix_df.shape == (n_users, n_items):
-        print("Success: Matrix dimensions match unique user and item counts.")
-    else:
-        print("Warning: Matrix dimensions do not match unique counts.")
-
-    # Verify numpy conversion
-    print("\nVerifying Numpy Conversion:")
-    mat_np, u_ids, i_ids = get_movielens_data_numpy()
-    print(f"Numpy matrix shape: {mat_np.shape}")
-    print(f"Type: {type(mat_np)}")
+    print("\nTesting ML-1M Data Loading...")
+    try:
+        mat, u, i = get_movielens_1m_data_numpy()
+        print(f"ML-1M Shape: {mat.shape}")
+        g = get_movielens_1m_gender_map()
+        print(f"ML-1M Gender Map Size: {len(g)}")
+    except Exception as e:
+        print(e)
 
 
 if __name__ == "__main__":
