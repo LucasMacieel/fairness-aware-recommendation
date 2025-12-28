@@ -29,11 +29,69 @@ def create_user_item_matrix(df):
     """
     # Create pivot table
     user_item_matrix = df.pivot(index="user_id", columns="item_id", values="rating")
-
-    # Fill missing values with 0
     user_item_matrix_filled = user_item_matrix.fillna(0)
-
     return user_item_matrix_filled
+
+
+def split_train_test_stratified(df, test_ratio=0.2, seed=42):
+    """
+    Splits the dataframe into train and test sets, stratified by user.
+
+    Note: Uses pandas random_state which is independent of numpy.random.seed().
+    The seed=42 ensures reproducibility within this function regardless of
+    external random state. For full reproducibility, ensure this function
+    is called before any randomization that might affect pandas internals.
+    """
+    # Group by user and sample
+    # Using specific column selection or include_groups=False avoids FutureWarning
+    # We capture indices to ensure we get full rows back
+    test_indices = (
+        df.groupby("user_id", group_keys=False)
+        .apply(
+            lambda x: x.sample(frac=test_ratio, random_state=seed), include_groups=False
+        )
+        .index
+    )
+
+    test_df = df.loc[test_indices]
+    train_df = df.drop(test_indices)
+    return train_df, test_df
+
+
+def create_aligned_matrices(train_df, test_df):
+    """
+    Creates aligned user-item matrices for train and test sets.
+    Ensures both matrices have the same shapes (Users x Items),
+    filling missing entries with 0.
+    """
+    # Get all unique users and items from both sets
+    unique_users = sorted(
+        set(train_df["user_id"].unique()) | set(test_df["user_id"].unique())
+    )
+    unique_items = sorted(
+        set(train_df["item_id"].unique()) | set(test_df["item_id"].unique())
+    )
+
+    # Use pivot_table to handle duplicates if any (though we shouldn't have them)
+    # Reindex to ensure alignment
+    train_matrix = (
+        train_df.pivot(index="user_id", columns="item_id", values="rating")
+        .reindex(index=unique_users, columns=unique_items, fill_value=0)
+        .fillna(0)
+    )
+
+    test_matrix = (
+        test_df.pivot(index="user_id", columns="item_id", values="rating")
+        .reindex(index=unique_users, columns=unique_items, fill_value=0)
+        .fillna(0)
+    )
+
+    return (
+        train_matrix.values,
+        test_matrix.values,
+        unique_users,
+        unique_items,
+    )
 
 
 def get_movielens_100k_gender_map():
@@ -126,9 +184,8 @@ def get_movielens_100k_data_numpy():
         raise FileNotFoundError("ML-100k data file not found.")
 
     df = load_data(data_path)
-    matrix_df = create_user_item_matrix(df)
-
-    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+    train_df, test_df = split_train_test_stratified(df)
+    return create_aligned_matrices(train_df, test_df)
 
 
 def get_movielens_1m_data_numpy():
@@ -140,9 +197,8 @@ def get_movielens_1m_data_numpy():
         raise FileNotFoundError("ML-1M data file not found.")
 
     df = load_data(data_path)
-    matrix_df = create_user_item_matrix(df)
-
-    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+    train_df, test_df = split_train_test_stratified(df)
+    return create_aligned_matrices(train_df, test_df)
 
 
 def get_post_data_path(filename):
@@ -172,14 +228,12 @@ def get_post_data_numpy():
     df_views_unique = df_views[["user_id", "post_id", "rating"]].drop_duplicates()
 
     # Pivot: Users as rows, Posts as columns
-    matrix_df = df_views_unique.pivot(
-        index="user_id", columns="post_id", values="rating"
-    )
+    # Pivot: Users as rows, Posts as columns
+    # We rename columns to generic user_id, item_id, rating for splitting function
+    df_views_unique = df_views_unique.rename(columns={"post_id": "item_id"})
 
-    # Fill missing with 0
-    matrix_df = matrix_df.fillna(0)
-
-    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+    train_df, test_df = split_train_test_stratified(df_views_unique)
+    return create_aligned_matrices(train_df, test_df)
 
 
 def get_post_gender_map():
@@ -244,9 +298,8 @@ def get_electronics_data_numpy():
     # But we need to handle duplicates if any. Let's strictly drop duplicates.
     df = df.drop_duplicates(subset=["user_id", "item_id"])
 
-    matrix_df = create_user_item_matrix(df)
-
-    return matrix_df.values, matrix_df.index.tolist(), matrix_df.columns.tolist()
+    train_df, test_df = split_train_test_stratified(df)
+    return create_aligned_matrices(train_df, test_df)
 
 
 def get_electronics_gender_map():
@@ -284,8 +337,8 @@ def get_electronics_gender_map():
 def main():
     print("Testing ML-100k Data Loading...")
     try:
-        mat, u, i = get_movielens_100k_data_numpy()
-        print(f"ML-100k Shape: {mat.shape}")
+        mat, test, u, i = get_movielens_100k_data_numpy()
+        print(f"ML-100k Train Shape: {mat.shape}, Test Shape: {test.shape}")
         g = get_movielens_100k_gender_map()
         print(f"ML-100k Gender Map Size: {len(g)}")
     except Exception as e:
@@ -293,8 +346,8 @@ def main():
 
     print("\nTesting ML-1M Data Loading...")
     try:
-        mat, u, i = get_movielens_1m_data_numpy()
-        print(f"ML-1M Shape: {mat.shape}")
+        mat, test, u, i = get_movielens_1m_data_numpy()
+        print(f"ML-1M Train Shape: {mat.shape}, Test Shape: {test.shape}")
         g = get_movielens_1m_gender_map()
         print(f"ML-1M Gender Map Size: {len(g)}")
     except Exception as e:

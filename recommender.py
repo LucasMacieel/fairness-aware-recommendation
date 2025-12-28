@@ -1,6 +1,6 @@
-
 import numpy as np
 from scipy.sparse.linalg import svds
+
 
 def perform_svd(matrix, k=20):
     """
@@ -13,8 +13,10 @@ def perform_svd(matrix, k=20):
     Returns:
         prediction_matrix (np.ndarray): The reconstructed matrix with predicted ratings.
     """
-    # Normalize by user mean ratings
-    user_ratings_mean = np.mean(matrix, axis=1)
+    # Normalize by user mean ratings (only considering non-zero ratings)
+    # Create a masked array where 0s are invalid
+    masked_matrix = np.ma.masked_equal(matrix, 0)
+    user_ratings_mean = masked_matrix.mean(axis=1).data
     matrix_demeaned = matrix - user_ratings_mean.reshape(-1, 1)
 
     # Perform SVD

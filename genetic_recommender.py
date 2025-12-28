@@ -1,5 +1,6 @@
 import numpy as np
 import copy
+from metrics import calculate_gender_gap_indexed, calculate_item_coverage_simple
 
 
 class GeneticRecommender:
@@ -17,7 +18,8 @@ class GeneticRecommender:
         """
         candidate_lists: np.array of shape (num_users, M), where M > k.
                          Contains item INDICES (not IDs) sorted by predicted score.
-        target_matrix: np.array of shape (num_users, num_items). Ground truth.
+        target_matrix: np.array of shape (num_users, num_items). Relevance scores
+                       (typically masked SVD predictions, NOT test ground truth).
         """
         self.num_users = num_users
         self.num_items = num_items
@@ -63,6 +65,15 @@ class GeneticRecommender:
     def fitness(self, individual):
         """
         Calculates fitness based on objective functions.
+
+        DESIGN NOTE (Option B - Test-Set IDCG):
+        The DCG numerator is computed from target_matrix (SVD predictions), but the
+        IDCG denominator comes from the TEST SET (set via set_user_idcg_values()).
+
+        This is intentional: both baseline and GA/NSGA-II use the same test-set IDCG,
+        ensuring fair comparison. The GA optimizes SVD-based relevance while being
+        normalized by ground-truth ideal rankings. This is acceptable in a re-ranking
+        scenario where the goal is fair evaluation, not pure prediction.
         """
         # 1. Decode to get recommendations
         recs_indices = self.decode(individual)
@@ -80,13 +91,14 @@ class GeneticRecommender:
             r = np.asarray(relevance, dtype=float)
             if r.size:
                 dcg = np.sum(r / np.log2(np.arange(2, r.size + 2)))
-                # Use pre-calculated Global IDCG
+                # Use pre-calculated Global IDCG - MUST be set for correct comparison
                 if self.user_idcg_values is not None:
                     idcg = self.user_idcg_values[u]
                 else:
-                    # Fallback to local (incorrect for comparison, but safe if not set)
-                    r_sorted = np.sort(r)[::-1]
-                    idcg = np.sum(r_sorted / np.log2(np.arange(2, r_sorted.size + 2)))
+                    raise ValueError(
+                        "user_idcg_values must be set via set_user_idcg_values() before calling fitness(). "
+                        "Without pre-calculated IDCG, NDCG normalization would be incorrect."
+                    )
 
                 if idcg > 0:
                     ndcg = dcg / idcg
@@ -99,28 +111,13 @@ class GeneticRecommender:
 
         mean_mdcg = np.mean(ndcg_scores)
 
-        # 2. Gender Gap
-        # We need the actual NDCG/DCG values to calculate the gap.
-        male_scores = []
-        female_scores = []
-        for idx in range(self.num_users):
-            g = self.gender_map.get(
-                idx, "Unknown"
-            )  # Assuming mapped to 0..N indices or dict keys.
-            if g == "M":
-                male_scores.append(ndcg_scores[idx])
-            elif g == "F":
-                female_scores.append(ndcg_scores[idx])
+        # 2. Gender Gap - using centralized function for consistency
+        gender_gap = calculate_gender_gap_indexed(ndcg_scores, self.gender_map)
 
-        avg_m = np.mean(male_scores) if male_scores else 0
-        avg_f = np.mean(female_scores) if female_scores else 0
-        gender_gap = abs(avg_m - avg_f)
-
-        # 3. Item Coverage
-        # Count unique item indices in the top K of all users
-        unique_items = set(recs_indices.flatten())
-        cov_count = len(unique_items)
-        item_coverage = cov_count / self.num_items
+        # 3. Item Coverage - using centralized function for consistency
+        item_coverage = calculate_item_coverage_simple(
+            recs_indices, self.item_ids, self.num_users
+        )
 
         score = (
             (self.weights["mdcg"] * mean_mdcg)
