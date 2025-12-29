@@ -2,11 +2,14 @@ import numpy as np
 import random
 import pandas as pd
 from data_processing import (
-    get_movielens_1m_data_numpy,
-    get_movielens_1m_gender_map,
+    get_movielens_1m_data_path,
+    load_data,
+    split_train_test_stratified,
+    create_aligned_matrices,
+    get_activity_group_map,
 )
 from metrics import (
-    calculate_gender_gap,
+    calculate_activity_gap,
     calculate_item_coverage_simple,
     calculate_user_ndcg_scores,
     get_user_ideal_dcg,
@@ -17,7 +20,7 @@ from utils.plotter import plot_pairwise_pareto
 
 
 def run_pipeline(
-    train_matrix, test_matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
+    train_matrix, test_matrix, user_ids, item_ids, activity_map, dataset_name, k_ndcg=10
 ):
     # Note: Random seed is set once in main() before data loading for full reproducibility.
     # No need to re-seed here as it would reset the random state mid-pipeline.
@@ -85,12 +88,12 @@ def run_pipeline(
     baseline_mdcg = np.mean(baseline_ndcg_scores)
 
     # Fairness - using global IDCG-normalized scores
-    if gender_map:
-        baseline_gender_gap = calculate_gender_gap(
-            baseline_ndcg_scores, user_ids, gender_map
+    if activity_map:
+        baseline_activity_gap = calculate_activity_gap(
+            baseline_ndcg_scores, user_ids, activity_map
         )
     else:
-        baseline_gender_gap = 0.0  # Default if no map
+        baseline_activity_gap = 0.0  # Default if no map
 
     # Item Coverage - using centralized function
     baseline_item_coverage = calculate_item_coverage_simple(
@@ -98,11 +101,11 @@ def run_pipeline(
     )
 
     results["Baseline MDCG"] = baseline_mdcg
-    results["Baseline Gender Gap"] = baseline_gender_gap
+    results["Baseline Activity Gap"] = baseline_activity_gap
     results["Baseline Item Coverage"] = baseline_item_coverage
 
     print(
-        f"Baseline: MDCG={baseline_mdcg:.4f}, Gender Gap={baseline_gender_gap:.4f}, Item Coverage={baseline_item_coverage:.4f}"
+        f"Baseline: MDCG={baseline_mdcg:.4f}, Activity Gap={baseline_activity_gap:.4f}, Item Coverage={baseline_item_coverage:.4f}"
     )
 
     # --- Genetic Algorithm ---
@@ -112,18 +115,18 @@ def run_pipeline(
     print(f"\nRunning Genetic Algorithm for {dataset_name}...")
 
     # Candidate lists already generated above for fair baseline comparison
-    weights = {"mdcg": 1.0, "gender_gap": 1.0, "item_coverage": 1.0}
+    weights = {"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0}
     POP_SIZE = 10
     GENERATIONS = 5
 
-    # Prepare GA Gender Map (index-based)
-    ga_gender_map = {}
-    if gender_map:
+    # Prepare GA Activity Map (index-based)
+    ga_activity_map = {}
+    if activity_map:
         for idx, uid in enumerate(user_ids):
-            ga_gender_map[idx] = gender_map.get(uid, "Unknown")
+            ga_activity_map[idx] = activity_map.get(uid, "inactive")
     else:
         for idx in range(num_users):
-            ga_gender_map[idx] = "Unknown"
+            ga_activity_map[idx] = "inactive"
 
     # Important: GA Target Matrix -> Test Matrix (Ground Truth)
     # The GA optimizes alignment with ground truth ratings from the test set.
@@ -144,7 +147,7 @@ def run_pipeline(
         num_items=num_items,
         candidate_lists=candidate_lists,
         target_matrix=ga_target_matrix,
-        gender_map=ga_gender_map,
+        activity_map=ga_activity_map,
         item_ids=item_ids,
         weights=weights,
         top_k=k_ndcg,
@@ -163,23 +166,23 @@ def run_pipeline(
     )
     ga_test_mdcg = np.mean(ga_test_ndcg_scores)
 
-    if gender_map:
-        ga_test_gender_gap = calculate_gender_gap(
-            ga_test_ndcg_scores, user_ids, gender_map
+    if activity_map:
+        ga_test_activity_gap = calculate_activity_gap(
+            ga_test_ndcg_scores, user_ids, activity_map
         )
     else:
-        ga_test_gender_gap = 0.0
+        ga_test_activity_gap = 0.0
 
     # --- Unified Item Coverage Calculation ---
     # Using centralized function for consistency
     ga_test_cov_ratio = calculate_item_coverage_simple(ga_recs_indices, item_ids)
 
     print(
-        f"GA Result (Test Set): MDCG={ga_test_mdcg:.4f}, Gender Gap={ga_test_gender_gap:.4f}, Item Coverage={ga_test_cov_ratio:.4f}"
+        f"GA Result (Test Set): MDCG={ga_test_mdcg:.4f}, Activity Gap={ga_test_activity_gap:.4f}, Item Coverage={ga_test_cov_ratio:.4f}"
     )
 
     results["GA MDCG"] = ga_test_mdcg
-    results["GA Gender Gap"] = ga_test_gender_gap
+    results["GA Activity Gap"] = ga_test_activity_gap
     results["GA Item Coverage"] = ga_test_cov_ratio
 
     # --- NSGA-II Algorithm ---
@@ -190,7 +193,7 @@ def run_pipeline(
         num_items=num_items,
         candidate_lists=candidate_lists,
         target_matrix=ga_target_matrix,
-        gender_map=ga_gender_map,
+        activity_map=ga_activity_map,
         item_ids=item_ids,
         weights=weights,
         top_k=k_ndcg,
@@ -228,9 +231,9 @@ def run_pipeline(
         )
         test_mdcg = np.mean(test_ndcg_scores)
 
-        # Calculate gender gap on test
-        if gender_map:
-            test_gap = calculate_gender_gap(test_ndcg_scores, user_ids, gender_map)
+        # Calculate activity gap on test
+        if activity_map:
+            test_gap = calculate_activity_gap(test_ndcg_scores, user_ids, activity_map)
         else:
             test_gap = 0.0
 
@@ -248,7 +251,7 @@ def run_pipeline(
         # Users can choose different solutions from the Pareto front based on their priorities.
         test_score = (
             (weights["mdcg"] * test_mdcg)
-            - (weights["gender_gap"] * test_gap)
+            - (weights["activity_gap"] * test_gap)
             + (weights["item_coverage"] * test_cov)
         )
 
@@ -276,17 +279,16 @@ def run_pipeline(
             f"  Coverage: min={min(cov_vals):.4f}, max={max(cov_vals):.4f}, mean={np.mean(cov_vals):.4f}"
         )
 
-    # Use the best solution found on test set (for results table)
     nsga_test_mdcg = best_nsga_test_mdcg
-    nsga_test_gender_gap = best_nsga_test_gap
+    nsga_test_activity_gap = best_nsga_test_gap
     nsga_test_cov_ratio = best_nsga_test_cov
 
     print(
-        f"\nNSGA-II Result (Best Weighted on Test Set): MDCG={nsga_test_mdcg:.4f}, Gender Gap={nsga_test_gender_gap:.4f}, Item Coverage={nsga_test_cov_ratio:.4f}"
+        f"\nNSGA-II Result (Best Weighted on Test Set): MDCG={nsga_test_mdcg:.4f}, Activity Gap={nsga_test_activity_gap:.4f}, Item Coverage={nsga_test_cov_ratio:.4f}"
     )
 
     results["NSGA-II MDCG"] = nsga_test_mdcg
-    results["NSGA-II Gender Gap"] = nsga_test_gender_gap
+    results["NSGA-II Activity Gap"] = nsga_test_activity_gap
     results["NSGA-II Item Coverage"] = nsga_test_cov_ratio
 
     return results
@@ -300,47 +302,43 @@ def main():
     np.random.seed(SEED)
     random.seed(SEED)
 
-    datasets = []
-
-    # MovieLens 1M
-    try:
-        datasets.append(
-            {
-                "name": "MovieLens 1M",
-                "loader": get_movielens_1m_data_numpy,
-                "gender_loader": get_movielens_1m_gender_map,
-            }
-        )
-    except Exception as e:
-        print(f"Error configuring MovieLens 1M: {e}")
-
     all_results = []
     k_ndcg = 10
 
-    for ds in datasets:
-        try:
-            print(f"\n--- Loading {ds['name']} ---")
-            train_matrix, test_matrix, user_ids, item_ids = ds["loader"]()
-            gender_map = ds["gender_loader"]()
+    # MovieLens 1M
+    try:
+        print("\n--- Loading MovieLens 1M ---")
+        data_path = get_movielens_1m_data_path()
+        if data_path:
+            df = load_data(data_path)
+            train_df, test_df = split_train_test_stratified(df)
+            train_matrix, test_matrix, user_ids, item_ids = create_aligned_matrices(
+                train_df, test_df
+            )
+
+            # Calculate activity groups from training data
+            activity_map = get_activity_group_map(train_df, user_ids)
 
             result = run_pipeline(
                 train_matrix,
                 test_matrix,
                 user_ids,
                 item_ids,
-                gender_map,
-                ds["name"],
+                activity_map,
+                "MovieLens 1M",
                 k_ndcg,
             )
             all_results.append(result)
+        else:
+            print("Skipping MovieLens 1M: Data file not found.")
 
-        except FileNotFoundError:
-            print(f"Skipping {ds['name']}: Data file not found.")
-        except Exception as e:
-            print(f"Error processing {ds['name']}: {e}")
-            import traceback
+    except FileNotFoundError:
+        print("Skipping MovieLens 1M: Data file not found.")
+    except Exception as e:
+        print(f"Error processing MovieLens 1M: {e}")
+        import traceback
 
-            traceback.print_exc()
+        traceback.print_exc()
 
     # Display Results as Pandas DataFrame
     if all_results:

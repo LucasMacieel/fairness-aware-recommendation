@@ -46,68 +46,68 @@ def calculate_ndcg_scores(original_matrix, prediction_matrix, k=20):
     return ndcg_scores
 
 
-def calculate_gender_gap(ndcg_scores, user_ids, gender_map):
+def calculate_activity_gap(ndcg_scores, user_ids, activity_map):
     """
-    Calculates the Gender Gap between Male and Female users using NDCG.
-    Gap = |Avg(NDCG_M) - Avg(NDCG_F)|
+    Calculates the Activity Gap between Active and Inactive users using NDCG.
+    Gap = |Avg(NDCG_active) - Avg(NDCG_inactive)|
 
     Use this function when you have the original user_ids mapping (e.g., baseline evaluation).
-    For GA/NSGA-II internal fitness with index-based mapping, use calculate_gender_gap_indexed().
+    For GA/NSGA-II internal fitness with index-based mapping, use calculate_activity_gap_indexed().
 
     Args:
         ndcg_scores: list of NDCG scores corresponding to user indices
         user_ids: list of original user IDs (maps index -> user_id)
-        gender_map: dict {user_id: 'M'/'F'/'Unknown'}
+        activity_map: dict {user_id: 'active'/'inactive'}
     """
-    male_scores = []
-    female_scores = []
+    active_scores = []
+    inactive_scores = []
 
     for idx, user_id in enumerate(user_ids):
         score = ndcg_scores[idx]
-        gender = gender_map.get(user_id, "Unknown")
+        group = activity_map.get(user_id, "inactive")
 
-        if gender == "M":
-            male_scores.append(score)
-        elif gender == "F":
-            female_scores.append(score)
+        if group == "active":
+            active_scores.append(score)
+        else:
+            inactive_scores.append(score)
 
-    avg_male = np.mean(male_scores) if male_scores else 0.0
-    avg_female = np.mean(female_scores) if female_scores else 0.0
+    avg_active = np.mean(active_scores) if active_scores else 0.0
+    avg_inactive = np.mean(inactive_scores) if inactive_scores else 0.0
 
     print(
-        f"Fairness Analysis: Male Avg: {avg_male:.4f} (n={len(male_scores)}), Female Avg: {avg_female:.4f} (n={len(female_scores)})"
+        f"Fairness Analysis: Active Avg: {avg_active:.4f} (n={len(active_scores)}), Inactive Avg: {avg_inactive:.4f} (n={len(inactive_scores)})"
     )
 
-    gender_gap = abs(avg_male - avg_female)
-    return gender_gap
+    activity_gap = abs(avg_active - avg_inactive)
+    return activity_gap
 
 
-def calculate_gender_gap_indexed(ndcg_scores, gender_map):
+def calculate_activity_gap_indexed(ndcg_scores, activity_map):
     """
-    Calculates the Gender Gap using index-based gender_map (for GA/NSGA-II internal fitness).
+    Calculates the Activity Gap using index-based activity_map (for GA/NSGA-II internal fitness).
 
-    Use this function during GA/NSGA-II optimization where gender_map is pre-converted
+    Use this function during GA/NSGA-II optimization where activity_map is pre-converted
     to index-based format. For baseline/test evaluation with original user IDs,
-    use calculate_gender_gap().
+    use calculate_activity_gap().
 
     Args:
         ndcg_scores: list of NDCG scores indexed by user position
-        gender_map: dict {user_index: 'M'/'F'/'Unknown'}
+        activity_map: dict {user_index: 'active'/'inactive'}
     """
-    male_scores = []
-    female_scores = []
+    active_scores = []
+    inactive_scores = []
 
     for idx, score in enumerate(ndcg_scores):
-        gender = gender_map.get(idx, "Unknown")
-        if gender == "M":
-            male_scores.append(score)
-        elif gender == "F":
-            female_scores.append(score)
+        group = activity_map.get(idx, "inactive")
+        if group == "active":
+            active_scores.append(score)
+        else:
+            inactive_scores.append(score)
 
-    avg_male = np.mean(male_scores) if male_scores else 0.0
-    avg_female = np.mean(female_scores) if female_scores else 0.0
+    avg_active = np.mean(active_scores) if active_scores else 0.0
+    avg_inactive = np.mean(inactive_scores) if inactive_scores else 0.0
 
-    return abs(avg_male - avg_female)
+    return abs(avg_active - avg_inactive)
 
 
 def calculate_item_coverage_simple(recs_indices, item_ids):

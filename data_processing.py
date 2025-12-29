@@ -74,30 +74,38 @@ def create_aligned_matrices(train_df, test_df):
     )
 
 
-def get_movielens_1m_gender_map():
+def get_activity_group_map(train_df, user_ids, top_percentile=0.05):
     """
-    Parses ml-1m/users.dat for gender.
-    Format: UserID::Gender::Age::Occupation::Zip-code
+    Categorizes users into 'active' (top 5%) or 'inactive' (bottom 95%)
+    based on their total interaction count in the training data.
+
+    Args:
+        train_df: Training DataFrame with 'user_id' column
+        user_ids: List of all user IDs in the dataset
+        top_percentile: Fraction of users to classify as 'active' (default: 0.05)
+
+    Returns:
+        dict: {user_id: 'active'/'inactive'}
     """
-    data_path = get_movielens_1m_data_path()
-    if not data_path:
-        return {}
+    # Count interactions per user
+    user_counts = train_df.groupby("user_id").size()
 
-    base_dir = os.path.dirname(data_path)
-    user_file = os.path.join(base_dir, "users.dat")
-    gender_map = {}
+    # Rank users by interaction count (descending) and determine threshold
+    ranked = user_counts.sort_values(ascending=False)
+    cutoff_idx = max(1, int(len(ranked) * top_percentile))
+    active_users = set(ranked.head(cutoff_idx).index)
 
-    if os.path.exists(user_file):
-        try:
-            with open(user_file, "r", encoding="ISO-8859-1") as f:
-                for line in f:
-                    parts = line.strip().split("::")
-                    if len(parts) >= 2:
-                        gender_map[int(parts[0])] = parts[1]
-        except Exception:
-            pass
+    # Build group map for all user_ids
+    activity_map = {
+        uid: "active" if uid in active_users else "inactive" for uid in user_ids
+    }
 
-    return gender_map
+    print(
+        f"Activity Groups: {sum(1 for v in activity_map.values() if v == 'active')} active, "
+        f"{sum(1 for v in activity_map.values() if v == 'inactive')} inactive"
+    )
+
+    return activity_map
 
 
 def _find_data_file(subfolder, filename):
@@ -140,10 +148,14 @@ def get_movielens_1m_data_numpy():
 def main():
     print("Testing ML-1M Data Loading...")
     try:
-        mat, test, u, i = get_movielens_1m_data_numpy()
+        # Load data and get train DataFrame for activity calculation
+        data_path = get_movielens_1m_data_path()
+        df = load_data(data_path)
+        train_df, test_df = split_train_test_stratified(df)
+        mat, test, u, i = create_aligned_matrices(train_df, test_df)
         print(f"ML-1M Train Shape: {mat.shape}, Test Shape: {test.shape}")
-        g = get_movielens_1m_gender_map()
-        print(f"ML-1M Gender Map Size: {len(g)}")
+        activity_map = get_activity_group_map(train_df, u)
+        print(f"ML-1M Activity Map Size: {len(activity_map)}")
     except Exception as e:
         print(e)
 

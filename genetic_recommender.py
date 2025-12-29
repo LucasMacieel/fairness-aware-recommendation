@@ -1,6 +1,6 @@
 import numpy as np
 import copy
-from metrics import calculate_gender_gap_indexed, calculate_item_coverage_simple
+from metrics import calculate_activity_gap_indexed, calculate_item_coverage_simple
 
 
 class GeneticRecommender:
@@ -10,9 +10,9 @@ class GeneticRecommender:
         num_items,
         candidate_lists,
         target_matrix,
-        gender_map,
+        activity_map,
         item_ids,
-        weights={"mdcg": 1.0, "gender_gap": 1.0, "item_coverage": 1.0},
+        weights={"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0},
         top_k=10,
     ):
         """
@@ -25,7 +25,7 @@ class GeneticRecommender:
         self.num_items = num_items
         self.candidate_lists = candidate_lists
         self.target_matrix = target_matrix
-        self.gender_map = gender_map
+        self.activity_map = activity_map
         self.item_ids = item_ids
         self.weights = weights
         self.top_k = top_k
@@ -108,19 +108,19 @@ class GeneticRecommender:
 
         mean_mdcg = np.mean(ndcg_scores)
 
-        # 2. Gender Gap - using centralized function for consistency
-        gender_gap = calculate_gender_gap_indexed(ndcg_scores, self.gender_map)
+        # 2. Activity Gap - using centralized function for consistency
+        activity_gap = calculate_activity_gap_indexed(ndcg_scores, self.activity_map)
 
         # 3. Item Coverage - using centralized function for consistency
         item_coverage = calculate_item_coverage_simple(recs_indices, self.item_ids)
 
         score = (
             (self.weights["mdcg"] * mean_mdcg)
-            - (self.weights["gender_gap"] * gender_gap)
+            - (self.weights["activity_gap"] * activity_gap)
             + (self.weights["item_coverage"] * item_coverage)
         )
 
-        return score, mean_mdcg, gender_gap, item_coverage
+        return score, mean_mdcg, activity_gap, item_coverage
 
     def crossover(self, parent1, parent2):
         """
@@ -260,7 +260,7 @@ class GeneticRecommender:
             current_best_ind = population[best_idx]
             current_best_metrics = fitness_results[
                 best_idx
-            ]  # (score, mdcg, gender_gap, item_coverage)
+            ]  # (score, mdcg, activity_gap, item_coverage)
 
             if max_score > best_score:
                 best_score = max_score
@@ -269,7 +269,7 @@ class GeneticRecommender:
             history.append(current_best_metrics)
 
             print(
-                f"Gen {gen}: Best Score={max_score:.4f}, MDCG={current_best_metrics[1]:.4f}, Gender Gap={current_best_metrics[2]:.4f}, Item Coverage={current_best_metrics[3]:.4f}"
+                f"Gen {gen}: Best Score={max_score:.4f}, MDCG={current_best_metrics[1]:.4f}, Activity Gap={current_best_metrics[2]:.4f}, Item Coverage={current_best_metrics[3]:.4f}"
             )
 
             # Selection
@@ -309,9 +309,9 @@ class NsgaIIRecommender(GeneticRecommender):
         num_items,
         candidate_lists,
         target_matrix,
-        gender_map,
+        activity_map,
         item_ids,
-        weights={"mdcg": 1.0, "gender_gap": 1.0, "item_coverage": 1.0},
+        weights={"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0},
         top_k=10,
     ):
         super().__init__(
@@ -319,7 +319,7 @@ class NsgaIIRecommender(GeneticRecommender):
             num_items,
             candidate_lists,
             target_matrix,
-            gender_map,
+            activity_map,
             item_ids,
             weights,
             top_k,
@@ -328,10 +328,10 @@ class NsgaIIRecommender(GeneticRecommender):
     def fast_non_dominated_sort(self, population_metrics):
         """
         Sorts the population into fronts.
-        population_metrics: list of tuples (score, mdcg, gender_gap, item_coverage)
+        population_metrics: list of tuples (score, mdcg, activity_gap, item_coverage)
         We want to:
          - Maximize MDCG -> Minimize -MDCG
-         - Minimize Gender Gap
+         - Minimize Activity Gap
          - Maximize Item Coverage -> Minimize -Item Coverage
         """
         pop_size = len(population_metrics)
@@ -343,9 +343,9 @@ class NsgaIIRecommender(GeneticRecommender):
         # Convert to minimization problem
         objectives = []
         for m in population_metrics:
-            # m = (score, mdcg, gender_gap, item_coverage)
+            # m = (score, mdcg, activity_gap, item_coverage)
             # Obj 1: -MDCG
-            # Obj 2: Gender Gap
+            # Obj 2: Activity Gap
             # Obj 3: -Item Coverage
             objectives.append([-m[1], m[2], -m[3]])
 
