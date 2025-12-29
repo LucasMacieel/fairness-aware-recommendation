@@ -1,4 +1,9 @@
 import numpy as np
+import warnings
+
+# --- Module-Level Constants ---
+# Single source of truth for default weights used by GA/NSGA-II
+DEFAULT_WEIGHTS = {"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0}
 
 
 def dcg_at_k(r, k):
@@ -13,37 +18,9 @@ def dcg_at_k(r, k):
     return 0.0
 
 
-def ndcg_at_k(r, k):
-    """
-    Score is normalized discounted cumulative gain (NDCG) at rank k
-    r: Relevance scores (list or numpy array) in rank order
-    k: Number of results to consider
-    """
-    dcg_max = dcg_at_k(sorted(r, reverse=True), k)
-    if not dcg_max:
-        return 0.0
-    return dcg_at_k(r, k) / dcg_max
-
-
-def calculate_ndcg_scores(original_matrix, prediction_matrix, k=20):
-    """
-    Calculates NDCG scores for all users.
-    Returns a list of scores corresponding to user indices.
-    """
-    ndcg_scores = []
-
-    for user_idx in range(original_matrix.shape[0]):
-        actual_ratings = original_matrix[user_idx]
-        predicted_ratings = prediction_matrix[user_idx]
-
-        item_pairs = list(zip(predicted_ratings, actual_ratings))
-        item_pairs.sort(key=lambda x: x[0], reverse=True)
-        relevance_ordered = [x[1] for x in item_pairs]
-
-        score = ndcg_at_k(relevance_ordered, k)
-        ndcg_scores.append(score)
-
-    return ndcg_scores
+# NOTE: ndcg_at_k and calculate_ndcg_scores were removed as they are unused.
+# The pipeline uses calculate_user_ndcg_scores with pre-calculated IDCG instead,
+# ensuring consistent normalization between baseline and GA/NSGA-II evaluations.
 
 
 def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=True):
@@ -66,19 +43,42 @@ def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=Tru
 
     Returns:
         float: Absolute difference between active and inactive group average NDCG
+
+    Raises:
+        ValueError: If user_ids length doesn't match ndcg_scores length
     """
+    # Validate user_ids length if provided
+    if user_ids is not None and len(user_ids) != len(ndcg_scores):
+        raise ValueError(
+            f"user_ids length ({len(user_ids)}) must match ndcg_scores length ({len(ndcg_scores)})"
+        )
+
     active_scores = []
     inactive_scores = []
+    missing_users_count = 0
 
     for idx, score in enumerate(ndcg_scores):
         # Use user_id as key if provided, otherwise use index
         key = user_ids[idx] if user_ids is not None else idx
-        group = activity_map.get(key, "inactive")
+
+        if key not in activity_map:
+            missing_users_count += 1
+            group = "inactive"  # Default to inactive for missing users
+        else:
+            group = activity_map[key]
 
         if group == "active":
             active_scores.append(score)
         else:
             inactive_scores.append(score)
+
+    # Warn if any users were not found in activity_map
+    if missing_users_count > 0:
+        warnings.warn(
+            f"{missing_users_count} users not found in activity_map, defaulted to 'inactive'. "
+            "This may indicate a key mismatch between user_ids and activity_map.",
+            UserWarning,
+        )
 
     avg_active = np.mean(active_scores) if active_scores else 0.0
     avg_inactive = np.mean(inactive_scores) if inactive_scores else 0.0
@@ -154,18 +154,63 @@ def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
     return ndcg_scores
 
 
-def get_user_ideal_dcg(original_matrix, k):
+def get_user_ideal_dcg_from_candidates(ground_truth_matrix, candidate_lists, top_k):
     """
-    Pre-calculates the Ideal DCG (IDCG) for all users based on their ground truth ratings.
-    Used for normalizing DCG in the Genetic Algorithm to ensure consistency with Baseline NDCG.
+    Calculates the Ideal DCG (IDCG) for each user based ONLY on items in their candidate pool.
 
-    Note: Users with no positive ratings in ground truth will have IDCG=0.
-    The GA/NSGA-II fitness functions handle this by returning NDCG=0 for such users.
+    This is the appropriate IDCG calculation for re-ranking evaluation:
+    - The algorithm can only recommend from the candidate pool
+    - IDCG should reflect the BEST possible ordering of candidate items
+    - This gives realistic NDCG scores that measure re-ranking quality
+
+    Args:
+        ground_truth_matrix: array of shape (num_users, num_items) with true ratings
+        candidate_lists: array of shape (num_users, candidate_size) with item indices
+        top_k: Number of items to consider for IDCG
+
+    Returns:
+        array: IDCG value for each user (based on their candidate pool)
+
+    Example:
+        If a user's candidates have ratings [5, 0, 3, 4, 0, ...], the IDCG is
+        computed from sorted([5, 4, 3, 0, 0, ...])[:k], not from ALL items globally.
     """
+    num_users = ground_truth_matrix.shape[0]
     idcg_scores = []
-    for user_idx in range(original_matrix.shape[0]):
-        actual_ratings = original_matrix[user_idx]
-        # Calculate IDCG based on the best possible ordering of ALL items (Global Ideal)
-        best_possible_dcg = dcg_at_k(sorted(actual_ratings, reverse=True), k)
+
+    for user_idx in range(num_users):
+        # Get ratings for ONLY the candidate items
+        candidate_indices = candidate_lists[user_idx]
+        candidate_ratings = ground_truth_matrix[user_idx, candidate_indices]
+
+        # IDCG = DCG of the best possible ordering of candidate items
+        best_possible_dcg = dcg_at_k(sorted(candidate_ratings, reverse=True), top_k)
         idcg_scores.append(best_possible_dcg)
+
     return np.array(idcg_scores)
+
+
+def compute_weighted_score(mdcg, activity_gap, item_coverage, weights):
+    """
+    Compute the combined weighted fitness score.
+
+    This is the single source of truth for the weighted scoring formula:
+    score = (w_mdcg * MDCG) - (w_gap * Gap) + (w_cov * Coverage)
+
+    - MDCG and Coverage are ADDED (higher is better)
+    - Activity Gap is SUBTRACTED (lower is better)
+
+    Args:
+        mdcg: Mean normalized DCG score
+        activity_gap: Absolute difference in NDCG between active/inactive groups
+        item_coverage: Ratio of unique items recommended
+        weights: dict with keys 'mdcg', 'activity_gap', 'item_coverage'
+
+    Returns:
+        float: Combined weighted score
+    """
+    return (
+        (weights["mdcg"] * mdcg)
+        - (weights["activity_gap"] * activity_gap)
+        + (weights["item_coverage"] * item_coverage)
+    )

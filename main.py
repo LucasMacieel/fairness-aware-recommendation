@@ -9,14 +9,27 @@ from data_processing import (
     get_activity_group_map,
 )
 from metrics import (
+    DEFAULT_WEIGHTS,
     calculate_activity_gap,
     calculate_item_coverage_simple,
     calculate_user_ndcg_scores,
-    get_user_ideal_dcg,
+    compute_weighted_score,
+    get_user_ideal_dcg_from_candidates,
 )
 from recommender import perform_svd
 from genetic_recommender import GeneticRecommender, NsgaIIRecommender
 from utils.plotter import plot_pairwise_pareto
+
+# --- Module-Level Constants ---
+# Centralized for consistency across the pipeline
+SEED = 42
+CANDIDATE_SIZE = 50  # Number of candidates per user for re-ranking
+SVD_K_FACTORS = (
+    20  # Latent factors for SVD (capped internally by perform_svd if needed)
+)
+POP_SIZE = 50  # Population size for GA/NSGA-II
+GENERATIONS = 5  # Number of generations for evolution
+K_NDCG = 10  # Top-K for NDCG evaluation
 
 
 def run_pipeline(
@@ -27,7 +40,7 @@ def run_pipeline(
     item_ids,
     activity_map,
     dataset_name,
-    k_ndcg=10,
+    k_ndcg=K_NDCG,
 ):
     """
     Run the recommendation pipeline with train/validation/test split.
@@ -52,12 +65,9 @@ def run_pipeline(
         f"user_ids length ({num_users_from_ids}) must match matrix rows ({train_matrix.shape[0]})"
     )
 
-    # Check sparsity or if we have enough data for k
-    k_factors = min(train_matrix.shape) - 1
-    k_factors = 20 if k_factors > 20 else k_factors
-
-    print(f"Performing SVD on Train Set with k={k_factors}...")
-    prediction_matrix = perform_svd(train_matrix, k=k_factors)
+    # Note: perform_svd internally caps k to min(matrix.shape) - 1 if needed
+    print(f"Performing SVD on Train Set with k={SVD_K_FACTORS}...")
+    prediction_matrix = perform_svd(train_matrix, k=SVD_K_FACTORS)
     print("SVD Complete.")
 
     # --- Masking Training Items ---
@@ -73,17 +83,8 @@ def run_pipeline(
         "Items": train_matrix.shape[1],
     }
 
-    # --- Pre-calculate IDCG for both Validation and Test Sets ---
-    # Validation IDCG: Used during GA/NSGA-II optimization
-    # Test IDCG: Used for final evaluation only
-    print(f"Calculating IDCG (Validation Set) for k={k_ndcg}...")
-    val_user_idcg_scores = get_user_ideal_dcg(val_matrix, k=k_ndcg)
-    print(f"Calculating IDCG (Test Set) for k={k_ndcg}...")
-    test_user_idcg_scores = get_user_ideal_dcg(test_matrix, k=k_ndcg)
-
-    # --- Generate Candidate Lists FIRST (needed for fair baseline comparison) ---
+    # --- Generate Candidate Lists FIRST (needed for IDCG and baseline comparison) ---
     num_users, num_items = train_matrix.shape
-    CANDIDATE_SIZE = 100
 
     # NOTE: Item coverage during optimization is bounded by CANDIDATE_SIZE * num_users unique items.
     # The GA/NSGA-II can only recommend items from the candidate pool, not the full item catalog.
@@ -95,6 +96,23 @@ def run_pipeline(
         scores = masked_prediction_matrix[u]
         top_indices = np.argsort(scores)[::-1][:CANDIDATE_SIZE]
         candidate_lists[u] = top_indices
+
+    # --- Pre-calculate IDCG from CANDIDATE POOL (Re-ranking Evaluation) ---
+    # IMPORTANT: IDCG is computed from only the candidate items, not all items.
+    # This is appropriate for re-ranking evaluation where:
+    #   - The algorithm can ONLY recommend from the candidate pool
+    #   - IDCG reflects the BEST achievable ordering within constraints
+    #   - NDCG measures how well the algorithm re-ranks candidates
+    # Using global IDCG (all items) would artificially deflate scores since
+    # the ideal items may not be in the candidate pool at all.
+    print(f"Calculating IDCG from candidates (Validation Set) for top_k={k_ndcg}...")
+    val_user_idcg_scores = get_user_ideal_dcg_from_candidates(
+        val_matrix, candidate_lists, top_k=k_ndcg
+    )
+    print(f"Calculating IDCG from candidates (Test Set) for top_k={k_ndcg}...")
+    test_user_idcg_scores = get_user_ideal_dcg_from_candidates(
+        test_matrix, candidate_lists, top_k=k_ndcg
+    )
 
     # --- Baseline Evaluation (using same candidate pool as GA for fair comparison) ---
     print(f"\nEvaluating Baseline Recommender (NDCG@{k_ndcg})...")
@@ -140,25 +158,8 @@ def run_pipeline(
     print(f"\nRunning Genetic Algorithm for {dataset_name}...")
 
     # Candidate lists already generated above for fair baseline comparison
-    #
-    # WEIGHT SEMANTICS:
-    # Weights control objective importance in the combined fitness score.
-    # The fitness formula is: score = (w_mdcg * MDCG) - (w_gap * Gap) + (w_cov * Coverage)
-    # - MDCG and Coverage are ADDED (higher is better)
-    # - Activity Gap is SUBTRACTED (lower is better, so minimizing gap improves score)
-    # All metrics are in [0, 1] range, so equal weights give balanced importance.
-    weights = {"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0}
-    POP_SIZE = 100
-    GENERATIONS = 20
-
-    # Prepare GA Activity Map (index-based)
-    ga_activity_map = {}
-    if activity_map:
-        for idx, uid in enumerate(user_ids):
-            ga_activity_map[idx] = activity_map.get(uid, "inactive")
-    else:
-        for idx in range(num_users):
-            ga_activity_map[idx] = "inactive"
+    # Using module-level DEFAULT_WEIGHTS and constants for consistency
+    weights = DEFAULT_WEIGHTS
 
     # Important: GA Target Matrix -> VALIDATION Matrix
     # The GA optimizes alignment with validation set ratings.
@@ -175,8 +176,9 @@ def run_pipeline(
         num_items=num_items,
         candidate_lists=candidate_lists,
         target_matrix=ga_target_matrix,
-        activity_map=ga_activity_map,
+        activity_map=activity_map,  # Pass original activity_map (uses user_ids as keys)
         item_ids=item_ids,
+        user_ids=user_ids,  # Pass user_ids for consistent activity_gap calculation
         weights=weights,
         top_k=k_ndcg,
     )
@@ -221,8 +223,9 @@ def run_pipeline(
         num_items=num_items,
         candidate_lists=candidate_lists,
         target_matrix=ga_target_matrix,  # Uses val_matrix (same as GA)
-        activity_map=ga_activity_map,
+        activity_map=activity_map,  # Pass original activity_map (uses user_ids as keys)
         item_ids=item_ids,
+        user_ids=user_ids,  # Pass user_ids for consistent activity_gap calculation
         weights=weights,
         top_k=k_ndcg,
     )
@@ -231,7 +234,10 @@ def run_pipeline(
 
     pareto_front, history_nsga = nsga.run(generations=GENERATIONS, pop_size=POP_SIZE)
 
-    # Plotting Internal Metrics to show trade-offs found during training
+    # --- Pareto Front Visualization (VALIDATION Set Metrics) ---
+    # NOTE: This plot shows metrics computed against the VALIDATION set (nsga.target_matrix),
+    # NOT the test set. This visualizes the trade-offs discovered during optimization.
+    # Final test set results are reported separately below.
     pareto_metrics = []
     for ind in pareto_front:
         _, mdcg, gap, cov = nsga.fitness(ind)
@@ -277,13 +283,9 @@ def run_pipeline(
         # NSGA-II produces a Pareto front of non-dominated solutions (trade-offs).
         # For the results TABLE, we need to pick ONE representative solution to compare against baseline/GA.
         # This weighted sum is ONLY for that purpose - it does NOT undermine the multi-objective optimization.
-        # The full Pareto front diversity is reported separately above (min/max/mean for each metric).
+        # The full Pareto front diversity is reported separately below (min/max/mean for each metric).
         # Users can choose different solutions from the Pareto front based on their priorities.
-        test_score = (
-            (weights["mdcg"] * test_mdcg)
-            - (weights["activity_gap"] * test_gap)
-            + (weights["item_coverage"] * test_cov)
-        )
+        test_score = compute_weighted_score(test_mdcg, test_gap, test_cov, weights)
 
         if test_score > best_nsga_test_score:
             best_nsga_test_score = test_score
@@ -328,12 +330,12 @@ def main():
     # Set random seed FIRST before any data loading to ensure full reproducibility.
     # Note: data_processing.py uses pandas random_state=42 internally, but this ensures
     # any numpy/random calls during dataset configuration are also deterministic.
-    SEED = 42
+    # Using module-level SEED constant for consistency.
     np.random.seed(SEED)
     random.seed(SEED)
 
     all_results = []
-    k_ndcg = 10
+    k_ndcg = K_NDCG  # Use module-level constant
 
     # MovieLens 1M
     try:

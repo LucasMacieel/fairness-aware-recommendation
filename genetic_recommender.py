@@ -1,6 +1,12 @@
 import numpy as np
 import copy
-from metrics import calculate_activity_gap, calculate_item_coverage_simple
+from metrics import (
+    DEFAULT_WEIGHTS,
+    calculate_activity_gap,
+    calculate_item_coverage_simple,
+    compute_weighted_score,
+    dcg_at_k,
+)
 
 
 class GeneticRecommender:
@@ -12,21 +18,36 @@ class GeneticRecommender:
         target_matrix,
         activity_map,
         item_ids,
-        weights={"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0},
+        user_ids=None,
+        weights=None,
         top_k=10,
     ):
         """
         candidate_lists: np.array of shape (num_users, M), where M > k.
                          Contains item INDICES (not IDs) sorted by predicted score.
         target_matrix: np.array of shape (num_users, num_items). Ground truth ratings
-                       from the test set (oracular setting for fair re-ranking evaluation).
+                       from the validation set (used during GA/NSGA-II optimization).
+                       Final evaluation is performed separately on the held-out test set.
+        activity_map: dict mapping user_id -> 'active'/'inactive' (uses user_ids as keys)
+        user_ids: list of original user IDs (index -> user_id mapping). Required for
+                  consistent activity_gap calculation with main.py evaluation.
+        weights: dict with keys 'mdcg', 'activity_gap', 'item_coverage'.
+                 For GA: Used directly in fitness optimization (weighted sum).
+                 For NSGA-II: Only used post-hoc to select representative solution from Pareto front.
+                 Defaults to DEFAULT_WEIGHTS from metrics.py.
         """
+        if weights is None:
+            weights = (
+                DEFAULT_WEIGHTS.copy()
+            )  # Use centralized default, copy to avoid mutation
+
         self.num_users = num_users
         self.num_items = num_items
         self.candidate_lists = candidate_lists
         self.target_matrix = target_matrix
         self.activity_map = activity_map
         self.item_ids = item_ids
+        self.user_ids = user_ids
         self.weights = weights
         self.top_k = top_k
         self.candidate_len = candidate_lists.shape[1]
@@ -85,11 +106,9 @@ class GeneticRecommender:
 
             relevance = true_ratings  # These are the true ratings of the K items in their current order.
 
-            # Let's calculate DCG directly here for speed.
-
             r = np.asarray(relevance, dtype=float)
             if r.size:
-                dcg = np.sum(r / np.log2(np.arange(2, r.size + 2)))
+                dcg = dcg_at_k(r, len(r))  # Use centralized function for consistency
                 # Use pre-calculated Global IDCG - MUST be set for correct comparison
                 if self.user_idcg_values is not None:
                     idcg = self.user_idcg_values[u]
@@ -110,18 +129,17 @@ class GeneticRecommender:
 
         mean_mdcg = np.mean(ndcg_scores)
 
-        # 2. Activity Gap - using centralized function for consistency (verbose=False during optimization)
+        # 2. Activity Gap - using centralized function with user_ids for consistency with main.py
         activity_gap = calculate_activity_gap(
-            ndcg_scores, self.activity_map, verbose=False
+            ndcg_scores, self.activity_map, user_ids=self.user_ids, verbose=False
         )
 
         # 3. Item Coverage - using centralized function for consistency
         item_coverage = calculate_item_coverage_simple(recs_indices, self.item_ids)
 
-        score = (
-            (self.weights["mdcg"] * mean_mdcg)
-            - (self.weights["activity_gap"] * activity_gap)
-            + (self.weights["item_coverage"] * item_coverage)
+        # Use centralized weighted score function for consistency with main.py evaluation
+        score = compute_weighted_score(
+            mean_mdcg, activity_gap, item_coverage, self.weights
         )
 
         return score, mean_mdcg, activity_gap, item_coverage
@@ -209,8 +227,17 @@ class GeneticRecommender:
         users_to_mutate = np.random.choice(self.num_users, num_mutations, replace=False)
 
         for u in users_to_mutate:
+            # Select a position within top-k to swap out
             idx1 = np.random.randint(0, self.top_k)
-            idx2 = np.random.randint(0, self.candidate_len)
+
+            # Select a different position from the candidate list to swap in
+            # Ensure idx2 != idx1 to avoid no-op swaps
+            # We pick from [top_k, candidate_len) to always bring in a new item
+            if self.candidate_len > self.top_k:
+                idx2 = np.random.randint(self.top_k, self.candidate_len)
+            else:
+                # Edge case: candidate_len == top_k, pick any different index
+                idx2 = (idx1 + 1) % self.candidate_len
 
             individual[u, idx1], individual[u, idx2] = (
                 individual[u, idx2],
@@ -307,6 +334,17 @@ class GeneticRecommender:
 
 
 class NsgaIIRecommender(GeneticRecommender):
+    """
+    NSGA-II Multi-Objective Recommender.
+
+    Unlike GeneticRecommender, this class performs true multi-objective optimization
+    using Pareto dominance. The 'weights' parameter is NOT used during optimization;
+    instead, it's only used post-hoc to select a single representative solution
+    from the Pareto front for comparison in results tables.
+
+    The Pareto front itself contains all non-dominated trade-off solutions.
+    """
+
     def __init__(
         self,
         num_users,
@@ -315,7 +353,8 @@ class NsgaIIRecommender(GeneticRecommender):
         target_matrix,
         activity_map,
         item_ids,
-        weights={"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0},
+        user_ids=None,
+        weights=None,
         top_k=10,
     ):
         super().__init__(
@@ -325,6 +364,7 @@ class NsgaIIRecommender(GeneticRecommender):
             target_matrix,
             activity_map,
             item_ids,
+            user_ids,
             weights,
             top_k,
         )
