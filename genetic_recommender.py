@@ -112,9 +112,7 @@ class GeneticRecommender:
         gender_gap = calculate_gender_gap_indexed(ndcg_scores, self.gender_map)
 
         # 3. Item Coverage - using centralized function for consistency
-        item_coverage = calculate_item_coverage_simple(
-            recs_indices, self.item_ids, self.num_users
-        )
+        item_coverage = calculate_item_coverage_simple(recs_indices, self.item_ids)
 
         score = (
             (self.weights["mdcg"] * mean_mdcg)

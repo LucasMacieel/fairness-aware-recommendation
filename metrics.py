@@ -110,23 +110,66 @@ def calculate_gender_gap_indexed(ndcg_scores, gender_map):
     return abs(avg_male - avg_female)
 
 
-def calculate_item_coverage_simple(recs_indices, item_ids, num_users):
+def calculate_item_coverage_simple(recs_indices, item_ids):
     """
     Calculate item coverage ratio from recommendation indices.
 
     Args:
         recs_indices: array of shape (num_users, k) with item indices
-        item_ids: list of all item IDs in the dataset
-        num_users: number of users
+        item_ids: list of all item IDs in the dataset (must be unique)
 
     Returns:
         float: coverage ratio (unique recommended items / total items)
+
+    Raises:
+        AssertionError: if item_ids contains duplicates
     """
+    # Validate that item_ids has no duplicates to ensure correct coverage calculation
+    assert len(item_ids) == len(set(item_ids)), (
+        f"item_ids must be unique. Found {len(item_ids)} items but only {len(set(item_ids))} unique."
+    )
+
     unique_items = set()
-    for u in range(num_users):
+    for u in range(recs_indices.shape[0]):
         for idx in recs_indices[u]:
             unique_items.add(item_ids[idx])
     return len(unique_items) / len(item_ids) if len(item_ids) > 0 else 0.0
+
+
+def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
+    """
+    Calculate NDCG scores for each user based on their recommendations.
+
+    This is the centralized function for NDCG calculation used by both
+    baseline evaluation and GA/NSGA-II evaluation to ensure consistency.
+
+    Args:
+        recs_indices: array of shape (num_users, k) with recommended item indices
+        ground_truth_matrix: array of shape (num_users, num_items) with true ratings
+        idcg_values: array of pre-calculated IDCG values per user
+
+    Returns:
+        list: NDCG scores for each user
+    """
+    ndcg_scores = []
+    num_users = recs_indices.shape[0]
+
+    for u in range(num_users):
+        rec_inds = recs_indices[u]
+        true_ratings = ground_truth_matrix[u, rec_inds]
+
+        r = np.asarray(true_ratings, dtype=float)
+        if r.size:
+            dcg = dcg_at_k(r, len(r))
+            idcg = idcg_values[u]
+            if idcg > 0:
+                ndcg_scores.append(dcg / idcg)
+            else:
+                ndcg_scores.append(0.0)
+        else:
+            ndcg_scores.append(0.0)
+
+    return ndcg_scores
 
 
 def get_user_ideal_dcg(original_matrix, k):

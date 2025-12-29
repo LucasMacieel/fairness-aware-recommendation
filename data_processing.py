@@ -187,68 +187,6 @@ def get_movielens_1m_data_numpy():
     return create_aligned_matrices(train_df, test_df)
 
 
-def get_post_data_path(filename):
-    """Locates files in the data/post directory."""
-    return _find_data_file("post", filename)
-
-
-def get_post_data_numpy():
-    """
-    Returns the user-post interaction matrix as a numpy array from data/post.
-    Implicit feedback: 1 for viewed, 0 for not viewed.
-    """
-    view_path = get_post_data_path("view_data.csv")
-    if not view_path:
-        raise FileNotFoundError("View data file not found.")
-
-    # Load view data
-    # format: user_id, post_id, time_stamp
-    df_views = pd.read_csv(view_path)
-
-    # We treat any view as a 'positive' interaction (1)
-    df_views["rating"] = 1
-
-    # Create pivot table
-    # Since users can view multiple times, we just want to know if they viewed it at least once.
-    # drop_duplicates handles multiple views of same post by same user
-    df_views_unique = df_views[["user_id", "post_id", "rating"]].drop_duplicates()
-
-    # Pivot: Users as rows, Posts as columns
-    # Pivot: Users as rows, Posts as columns
-    # We rename columns to generic user_id, item_id, rating for splitting function
-    df_views_unique = df_views_unique.rename(columns={"post_id": "item_id"})
-
-    train_df, test_df = split_train_test_stratified(df_views_unique)
-    return create_aligned_matrices(train_df, test_df)
-
-
-def get_post_gender_map():
-    """
-    Parses data/post/user_data.csv to create a mapping of user_id to gender.
-    Returns:
-        dict: {user_id: gender (M/F)}
-    """
-    user_path = get_post_data_path("user_data.csv")
-    if not user_path:
-        return {}
-
-    df_users = pd.read_csv(user_path)
-
-    # Standardize gender to M/F
-    gender_map = {}
-    for _, row in df_users.iterrows():
-        uid = row["user_id"]
-        gender_str = str(row["gender"]).lower()
-        if gender_str == "male":
-            gender_map[uid] = "M"
-        elif gender_str == "female":
-            gender_map[uid] = "F"
-        else:
-            gender_map[uid] = "Unknown"
-
-    return gender_map
-
-
 def get_electronics_data_path():
     """Locates the data file in data/electronics."""
     return _find_data_file("electronics", "df_electronics.csv")
@@ -292,6 +230,10 @@ def get_electronics_gender_map():
     """
     Parses data/electronics/df_electronics.csv to create a mapping of user_id to gender.
     The column is 'user_attr'.
+
+    Note: This function applies the same user filtering as get_electronics_data_numpy()
+    to ensure consistency between the data matrix and gender map.
+
     Returns:
         dict: {user_id: gender (M/F)}
     """
@@ -300,6 +242,17 @@ def get_electronics_gender_map():
         return {}
 
     df = pd.read_csv(data_path, usecols=["user_id", "user_attr"])
+
+    # Apply the same user filtering as get_electronics_data_numpy()
+    # This ensures the gender map only contains users that are in the filtered dataset
+    unique_users = df["user_id"].unique()
+    if len(unique_users) > 5000:
+        import numpy as np
+
+        # Use the SAME local RandomState(42) as get_electronics_data_numpy
+        rng = np.random.RandomState(42)
+        selected_users = rng.choice(unique_users, size=5000, replace=False)
+        df = df[df["user_id"].isin(selected_users)]
 
     # Drop rows with missing gender
     df = df.dropna(subset=["user_attr"])

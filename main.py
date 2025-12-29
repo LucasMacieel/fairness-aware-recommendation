@@ -12,6 +12,7 @@ from data_processing import (
 from metrics import (
     calculate_gender_gap,
     calculate_item_coverage_simple,
+    calculate_user_ndcg_scores,
     get_user_ideal_dcg,
 )
 from recommender import perform_svd
@@ -22,10 +23,8 @@ from utils.plotter import plot_pairwise_pareto
 def run_pipeline(
     train_matrix, test_matrix, user_ids, item_ids, gender_map, dataset_name, k_ndcg=10
 ):
-    # Set random seed for reproducibility
-    SEED = 42
-    np.random.seed(SEED)
-    random.seed(SEED)
+    # Note: Random seed is set once in main() before data loading for full reproducibility.
+    # No need to re-seed here as it would reset the random state mid-pipeline.
 
     print(f"\nProcessing {dataset_name} Dataset...")
     print(f"Train Matrix Shape: {train_matrix.shape}")
@@ -77,27 +76,16 @@ def run_pipeline(
 
     # Baseline: Top-K from candidate list (same constraint as GA)
     # This ensures fair comparison - baseline also limited to same candidate pool
-    baseline_ndcg_scores = []
     baseline_recs_indices = np.zeros((num_users, k_ndcg), dtype=int)
 
     for u in range(num_users):
         # Baseline takes the top-k from candidate list (which is already sorted by SVD score)
-        rec_inds = candidate_lists[u, :k_ndcg]
-        baseline_recs_indices[u] = rec_inds
+        baseline_recs_indices[u] = candidate_lists[u, :k_ndcg]
 
-        # Calculate NDCG using global IDCG (same as GA evaluation)
-        true_ratings = test_matrix[u, rec_inds]
-        r = np.asarray(true_ratings, dtype=float)
-        if r.size:
-            dcg = np.sum(r / np.log2(np.arange(2, r.size + 2)))
-            idcg = user_idcg_scores[u]
-            if idcg > 0:
-                baseline_ndcg_scores.append(dcg / idcg)
-            else:
-                baseline_ndcg_scores.append(0.0)
-        else:
-            baseline_ndcg_scores.append(0.0)
-
+    # Calculate NDCG using centralized function
+    baseline_ndcg_scores = calculate_user_ndcg_scores(
+        baseline_recs_indices, test_matrix, user_idcg_scores
+    )
     baseline_mdcg = np.mean(baseline_ndcg_scores)
 
     # Fairness - using global IDCG-normalized scores
@@ -110,7 +98,7 @@ def run_pipeline(
 
     # Item Coverage - using centralized function
     baseline_item_coverage = calculate_item_coverage_simple(
-        baseline_recs_indices, item_ids, num_users
+        baseline_recs_indices, item_ids
     )
 
     results["Baseline MDCG"] = baseline_mdcg
@@ -129,8 +117,8 @@ def run_pipeline(
 
     # Candidate lists already generated above for fair baseline comparison
     weights = {"mdcg": 1.0, "gender_gap": 1.0, "item_coverage": 1.0}
-    POP_SIZE = 50
-    GENERATIONS = 15
+    POP_SIZE = 10
+    GENERATIONS = 5
 
     # Prepare GA Gender Map (index-based)
     ga_gender_map = {}
@@ -172,34 +160,12 @@ def run_pipeline(
 
     # --- Final Evaluation of GA on Test Set ---
     # We take the best individual (list of indices) and evaluate against Test Matrix.
-    # We cannot use ga.fitness() because that uses ga_target_matrix (SVD).
-    # We must manually evaluate.
-
-    def evaluate_individual_on_test(individual, test_mat, idcg_vals, recommender, k=10):
-        """Evaluate an individual against the test set with consistent metrics."""
-        recs_indices = recommender.decode(individual)
-        ndcg_list = []
-        for u in range(num_users):
-            rec_inds = recs_indices[u]
-            true_ratings = test_mat[u, rec_inds]
-
-            # Simple DCG on True Ratings
-            r = np.asarray(true_ratings, dtype=float)
-            if r.size:
-                dcg = np.sum(r / np.log2(np.arange(2, r.size + 2)))
-                idcg = idcg_vals[u]
-                if idcg > 0:
-                    ndcg_list.append(dcg / idcg)
-                else:
-                    ndcg_list.append(0.0)
-            else:
-                ndcg_list.append(0.0)
-
-        return np.mean(ndcg_list), ndcg_list, recs_indices
-
-    ga_test_mdcg, ga_test_ndcg_scores, ga_recs_indices = evaluate_individual_on_test(
-        best_ind, test_matrix, user_idcg_scores, ga, k=k_ndcg
+    # Using centralized functions for consistent metric calculation.
+    ga_recs_indices = ga.decode(best_ind)
+    ga_test_ndcg_scores = calculate_user_ndcg_scores(
+        ga_recs_indices, test_matrix, user_idcg_scores
     )
+    ga_test_mdcg = np.mean(ga_test_ndcg_scores)
 
     if gender_map:
         ga_test_gender_gap = calculate_gender_gap(
@@ -210,9 +176,7 @@ def run_pipeline(
 
     # --- Unified Item Coverage Calculation ---
     # Using centralized function for consistency
-    ga_test_cov_ratio = calculate_item_coverage_simple(
-        ga_recs_indices, item_ids, num_users
-    )
+    ga_test_cov_ratio = calculate_item_coverage_simple(ga_recs_indices, item_ids)
 
     print(
         f"GA Result (Test Set): MDCG={ga_test_mdcg:.4f}, Gender Gap={ga_test_gender_gap:.4f}, Item Coverage={ga_test_cov_ratio:.4f}"
@@ -261,10 +225,12 @@ def run_pipeline(
     best_nsga_test_cov = 0.0
 
     for ind in pareto_front:
-        # Evaluate this individual on the test set
-        test_mdcg, test_ndcg_scores, recs_indices = evaluate_individual_on_test(
-            ind, test_matrix, user_idcg_scores, nsga, k=k_ndcg
+        # Evaluate this individual on the test set using centralized functions
+        recs_indices = nsga.decode(ind)
+        test_ndcg_scores = calculate_user_ndcg_scores(
+            recs_indices, test_matrix, user_idcg_scores
         )
+        test_mdcg = np.mean(test_ndcg_scores)
 
         # Calculate gender gap on test
         if gender_map:
@@ -273,7 +239,7 @@ def run_pipeline(
             test_gap = 0.0
 
         # Calculate item coverage on test - using centralized function
-        test_cov = calculate_item_coverage_simple(recs_indices, item_ids, num_users)
+        test_cov = calculate_item_coverage_simple(recs_indices, item_ids)
 
         # Store for Pareto statistics
         pareto_test_results.append((test_mdcg, test_gap, test_cov))
@@ -331,6 +297,13 @@ def run_pipeline(
 
 
 def main():
+    # Set random seed FIRST before any data loading to ensure full reproducibility.
+    # Note: data_processing.py uses pandas random_state=42 internally, but this ensures
+    # any numpy/random calls during dataset configuration are also deterministic.
+    SEED = 42
+    np.random.seed(SEED)
+    random.seed(SEED)
+
     datasets = []
 
     # 1. MovieLens 100k
