@@ -19,20 +19,6 @@ def load_data(filepath):
     return df
 
 
-def create_user_item_matrix(df):
-    """
-    Converts the ratings DataFrame into a user-item matrix.
-    Rows: Users
-    Columns: Items
-    Values: Ratings
-    Missing values are filled with 0.
-    """
-    # Create pivot table
-    user_item_matrix = df.pivot(index="user_id", columns="item_id", values="rating")
-    user_item_matrix_filled = user_item_matrix.fillna(0)
-    return user_item_matrix_filled
-
-
 def split_train_test_stratified(df, test_ratio=0.2, seed=42):
     """
     Splits the dataframe into train and test sets, stratified by user.
@@ -286,9 +272,9 @@ def get_electronics_data_numpy():
     if len(unique_users) > 5000:
         import numpy as np
 
-        # Set seed for reproducibility if needed, but here we just want random
-        np.random.seed(42)
-        selected_users = np.random.choice(unique_users, size=5000, replace=False)
+        # Use local RandomState to avoid affecting global random state
+        rng = np.random.RandomState(42)
+        selected_users = rng.choice(unique_users, size=5000, replace=False)
     else:
         selected_users = unique_users
 

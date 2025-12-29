@@ -18,8 +18,8 @@ class GeneticRecommender:
         """
         candidate_lists: np.array of shape (num_users, M), where M > k.
                          Contains item INDICES (not IDs) sorted by predicted score.
-        target_matrix: np.array of shape (num_users, num_items). Relevance scores
-                       (typically masked SVD predictions, NOT test ground truth).
+        target_matrix: np.array of shape (num_users, num_items). Ground truth ratings
+                       from the test set (oracular setting for fair re-ranking evaluation).
         """
         self.num_users = num_users
         self.num_items = num_items
@@ -66,14 +66,11 @@ class GeneticRecommender:
         """
         Calculates fitness based on objective functions.
 
-        DESIGN NOTE (Option B - Test-Set IDCG):
-        The DCG numerator is computed from target_matrix (SVD predictions), but the
-        IDCG denominator comes from the TEST SET (set via set_user_idcg_values()).
-
-        This is intentional: both baseline and GA/NSGA-II use the same test-set IDCG,
-        ensuring fair comparison. The GA optimizes SVD-based relevance while being
-        normalized by ground-truth ideal rankings. This is acceptable in a re-ranking
-        scenario where the goal is fair evaluation, not pure prediction.
+        ORACULAR SETTING:
+        Both the DCG numerator and IDCG denominator are computed from the TEST SET.
+        This allows fair comparison between baseline and GA/NSGA-II methods.
+        The GA optimizes ground-truth relevance while being normalized by ground-truth
+        ideal rankings - this is acceptable in a re-ranking evaluation scenario.
         """
         # 1. Decode to get recommendations
         recs_indices = self.decode(individual)

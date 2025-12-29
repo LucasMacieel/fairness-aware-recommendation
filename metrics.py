@@ -133,6 +133,9 @@ def get_user_ideal_dcg(original_matrix, k):
     """
     Pre-calculates the Ideal DCG (IDCG) for all users based on their ground truth ratings.
     Used for normalizing DCG in the Genetic Algorithm to ensure consistency with Baseline NDCG.
+
+    Note: Users with no positive ratings in ground truth will have IDCG=0.
+    The GA/NSGA-II fitness functions handle this by returning NDCG=0 for such users.
     """
     idcg_scores = []
     for user_idx in range(original_matrix.shape[0]):
