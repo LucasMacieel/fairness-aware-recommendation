@@ -4,8 +4,8 @@ import pandas as pd
 from data_processing import (
     get_movielens_1m_data_path,
     load_data,
-    split_train_test_stratified,
-    create_aligned_matrices,
+    split_train_val_test_stratified,
+    create_aligned_matrices_3way,
     get_activity_group_map,
 )
 from metrics import (
@@ -20,14 +20,37 @@ from utils.plotter import plot_pairwise_pareto
 
 
 def run_pipeline(
-    train_matrix, test_matrix, user_ids, item_ids, activity_map, dataset_name, k_ndcg=10
+    train_matrix,
+    val_matrix,
+    test_matrix,
+    user_ids,
+    item_ids,
+    activity_map,
+    dataset_name,
+    k_ndcg=10,
 ):
+    """
+    Run the recommendation pipeline with train/validation/test split.
+
+    - train_matrix: Used for SVD training
+    - val_matrix: Used for GA/NSGA-II optimization (ground truth during optimization)
+    - test_matrix: Used for final unbiased evaluation only
+    """
     # Note: Random seed is set once in main() before data loading for full reproducibility.
     # No need to re-seed here as it would reset the random state mid-pipeline.
 
     print(f"\nProcessing {dataset_name} Dataset...")
     print(f"Train Matrix Shape: {train_matrix.shape}")
+    print(f"Validation Matrix Shape: {val_matrix.shape}")
     print(f"Test Matrix Shape: {test_matrix.shape}")
+
+    # --- Validate user_ids ordering matches matrix indices ---
+    # This is critical for ensuring activity_map lookups are consistent.
+    # user_ids[i] should correspond to row i in all matrices.
+    num_users_from_ids = len(user_ids)
+    assert num_users_from_ids == train_matrix.shape[0], (
+        f"user_ids length ({num_users_from_ids}) must match matrix rows ({train_matrix.shape[0]})"
+    )
 
     # Check sparsity or if we have enough data for k
     k_factors = min(train_matrix.shape) - 1
@@ -50,14 +73,17 @@ def run_pipeline(
         "Items": train_matrix.shape[1],
     }
 
-    # --- Pre-calculate Global IDCG using TEST Set ---
-    # Ground Truth is the Test Set. This IDCG is used for ALL methods to ensure consistency.
-    print(f"Calculating Global IDCG (Test Set) for k={k_ndcg}...")
-    user_idcg_scores = get_user_ideal_dcg(test_matrix, k=k_ndcg)
+    # --- Pre-calculate IDCG for both Validation and Test Sets ---
+    # Validation IDCG: Used during GA/NSGA-II optimization
+    # Test IDCG: Used for final evaluation only
+    print(f"Calculating IDCG (Validation Set) for k={k_ndcg}...")
+    val_user_idcg_scores = get_user_ideal_dcg(val_matrix, k=k_ndcg)
+    print(f"Calculating IDCG (Test Set) for k={k_ndcg}...")
+    test_user_idcg_scores = get_user_ideal_dcg(test_matrix, k=k_ndcg)
 
     # --- Generate Candidate Lists FIRST (needed for fair baseline comparison) ---
     num_users, num_items = train_matrix.shape
-    CANDIDATE_SIZE = 50
+    CANDIDATE_SIZE = 100
 
     # NOTE: Item coverage during optimization is bounded by CANDIDATE_SIZE * num_users unique items.
     # The GA/NSGA-II can only recommend items from the candidate pool, not the full item catalog.
@@ -81,16 +107,16 @@ def run_pipeline(
         # Baseline takes the top-k from candidate list (which is already sorted by SVD score)
         baseline_recs_indices[u] = candidate_lists[u, :k_ndcg]
 
-    # Calculate NDCG using centralized function
+    # Calculate NDCG on TEST set using centralized function
     baseline_ndcg_scores = calculate_user_ndcg_scores(
-        baseline_recs_indices, test_matrix, user_idcg_scores
+        baseline_recs_indices, test_matrix, test_user_idcg_scores
     )
     baseline_mdcg = np.mean(baseline_ndcg_scores)
 
     # Fairness - using global IDCG-normalized scores
     if activity_map:
         baseline_activity_gap = calculate_activity_gap(
-            baseline_ndcg_scores, user_ids, activity_map
+            baseline_ndcg_scores, activity_map, user_ids=user_ids
         )
     else:
         baseline_activity_gap = 0.0  # Default if no map
@@ -105,19 +131,25 @@ def run_pipeline(
     results["Baseline Item Coverage"] = baseline_item_coverage
 
     print(
-        f"Baseline: MDCG={baseline_mdcg:.4f}, Activity Gap={baseline_activity_gap:.4f}, Item Coverage={baseline_item_coverage:.4f}"
+        f"Baseline (Test Set): MDCG={baseline_mdcg:.4f}, Activity Gap={baseline_activity_gap:.4f}, Item Coverage={baseline_item_coverage:.4f}"
     )
 
     # --- Genetic Algorithm ---
     # The GA re-ranks candidates to improve Fairness while maintaining relevance.
-    # NOTE: This uses an ORACULAR setting where GA optimizes directly on test set ratings.
-    # This is acceptable for re-ranking evaluation where we compare methods fairly.
+    # NOTE: GA optimizes on VALIDATION set, final evaluation is on TEST set.
     print(f"\nRunning Genetic Algorithm for {dataset_name}...")
 
     # Candidate lists already generated above for fair baseline comparison
+    #
+    # WEIGHT SEMANTICS:
+    # Weights control objective importance in the combined fitness score.
+    # The fitness formula is: score = (w_mdcg * MDCG) - (w_gap * Gap) + (w_cov * Coverage)
+    # - MDCG and Coverage are ADDED (higher is better)
+    # - Activity Gap is SUBTRACTED (lower is better, so minimizing gap improves score)
+    # All metrics are in [0, 1] range, so equal weights give balanced importance.
     weights = {"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0}
-    POP_SIZE = 10
-    GENERATIONS = 5
+    POP_SIZE = 100
+    GENERATIONS = 20
 
     # Prepare GA Activity Map (index-based)
     ga_activity_map = {}
@@ -128,19 +160,15 @@ def run_pipeline(
         for idx in range(num_users):
             ga_activity_map[idx] = "inactive"
 
-    # Important: GA Target Matrix -> Test Matrix (Ground Truth)
-    # The GA optimizes alignment with ground truth ratings from the test set.
-    # Both DCG (numerator) and IDCG (denominator) now use test data for consistent NDCG.
-    ga_target_matrix = test_matrix  # Use ground truth for DCG calculation
+    # Important: GA Target Matrix -> VALIDATION Matrix
+    # The GA optimizes alignment with validation set ratings.
+    # Test set is reserved for final unbiased evaluation only.
+    ga_target_matrix = val_matrix  # Use validation set for optimization
 
-    # --- IDCG for GA/NSGA-II Optimization (Option B: Use Test-Set IDCG) ---
-    # DESIGN DECISION (Option B): We use the SAME test-set IDCG for both optimization and evaluation.
-    # This means the GA optimizes directly against the ground truth NDCG definition.
-    # Pros: Consistent metric between optimization and evaluation, simpler interpretation.
-    # Cons: The GA has "oracle" access to the ideal ranking from test data during optimization.
-    #       This is acceptable in a re-ranking scenario where we compare methods fairly.
-    print("Using Test-Set IDCG for both optimization and evaluation (Option B)...")
-    print(f"  -> IDCG mean: {np.mean(user_idcg_scores):.4f}")
+    # --- IDCG for GA/NSGA-II Optimization ---
+    # GA uses validation IDCG during optimization.
+    # Test IDCG is used only for final evaluation.
+    print(f"  -> Validation IDCG mean: {np.mean(val_user_idcg_scores):.4f}")
 
     ga = GeneticRecommender(
         num_users=num_users,
@@ -152,23 +180,23 @@ def run_pipeline(
         weights=weights,
         top_k=k_ndcg,
     )
-    # Inject the test-set IDCG values for consistent NDCG calculation (Option B)
-    ga.set_user_idcg_values(user_idcg_scores)
+    # Inject the validation-set IDCG values for optimization
+    ga.set_user_idcg_values(val_user_idcg_scores)
 
     best_ind, history = ga.run(generations=GENERATIONS, pop_size=POP_SIZE)
 
     # --- Final Evaluation of GA on Test Set ---
     # We take the best individual (list of indices) and evaluate against Test Matrix.
-    # Using centralized functions for consistent metric calculation.
+    # Using TEST set IDCG for final evaluation (different from optimization IDCG).
     ga_recs_indices = ga.decode(best_ind)
     ga_test_ndcg_scores = calculate_user_ndcg_scores(
-        ga_recs_indices, test_matrix, user_idcg_scores
+        ga_recs_indices, test_matrix, test_user_idcg_scores
     )
     ga_test_mdcg = np.mean(ga_test_ndcg_scores)
 
     if activity_map:
         ga_test_activity_gap = calculate_activity_gap(
-            ga_test_ndcg_scores, user_ids, activity_map
+            ga_test_ndcg_scores, activity_map, user_ids=user_ids
         )
     else:
         ga_test_activity_gap = 0.0
@@ -192,14 +220,14 @@ def run_pipeline(
         num_users=num_users,
         num_items=num_items,
         candidate_lists=candidate_lists,
-        target_matrix=ga_target_matrix,
+        target_matrix=ga_target_matrix,  # Uses val_matrix (same as GA)
         activity_map=ga_activity_map,
         item_ids=item_ids,
         weights=weights,
         top_k=k_ndcg,
     )
-    # Inject test-set IDCG for correct NDCG calculation (Option B)
-    nsga.set_user_idcg_values(user_idcg_scores)
+    # Inject validation-set IDCG for optimization
+    nsga.set_user_idcg_values(val_user_idcg_scores)
 
     pareto_front, history_nsga = nsga.run(generations=GENERATIONS, pop_size=POP_SIZE)
 
@@ -224,16 +252,18 @@ def run_pipeline(
     best_nsga_test_cov = 0.0
 
     for ind in pareto_front:
-        # Evaluate this individual on the test set using centralized functions
+        # Evaluate this individual on the test set using TEST IDCG
         recs_indices = nsga.decode(ind)
         test_ndcg_scores = calculate_user_ndcg_scores(
-            recs_indices, test_matrix, user_idcg_scores
+            recs_indices, test_matrix, test_user_idcg_scores
         )
         test_mdcg = np.mean(test_ndcg_scores)
 
         # Calculate activity gap on test
         if activity_map:
-            test_gap = calculate_activity_gap(test_ndcg_scores, user_ids, activity_map)
+            test_gap = calculate_activity_gap(
+                test_ndcg_scores, activity_map, user_ids=user_ids, verbose=False
+            )
         else:
             test_gap = 0.0
 
@@ -270,13 +300,13 @@ def run_pipeline(
             f"\n--- Pareto Front Trade-offs on Test Set ({len(pareto_test_results)} solutions) ---"
         )
         print(
-            f"  MDCG:     min={min(mdcg_vals):.4f}, max={max(mdcg_vals):.4f}, mean={np.mean(mdcg_vals):.4f}"
+            f"  MDCG:     min={min(mdcg_vals):.4f}, max={max(mdcg_vals):.4f}, mean={np.mean(mdcg_vals):.4f}, std={np.std(mdcg_vals):.4f}"
         )
         print(
-            f"  Gap:      min={min(gap_vals):.4f}, max={max(gap_vals):.4f}, mean={np.mean(gap_vals):.4f}"
+            f"  Gap:      min={min(gap_vals):.4f}, max={max(gap_vals):.4f}, mean={np.mean(gap_vals):.4f}, std={np.std(gap_vals):.4f}"
         )
         print(
-            f"  Coverage: min={min(cov_vals):.4f}, max={max(cov_vals):.4f}, mean={np.mean(cov_vals):.4f}"
+            f"  Coverage: min={min(cov_vals):.4f}, max={max(cov_vals):.4f}, mean={np.mean(cov_vals):.4f}, std={np.std(cov_vals):.4f}"
         )
 
     nsga_test_mdcg = best_nsga_test_mdcg
@@ -311,16 +341,21 @@ def main():
         data_path = get_movielens_1m_data_path()
         if data_path:
             df = load_data(data_path)
-            train_df, test_df = split_train_test_stratified(df)
-            train_matrix, test_matrix, user_ids, item_ids = create_aligned_matrices(
-                train_df, test_df
-            )
+            train_df, val_df, test_df = split_train_val_test_stratified(df)
+            (
+                train_matrix,
+                val_matrix,
+                test_matrix,
+                user_ids,
+                item_ids,
+            ) = create_aligned_matrices_3way(train_df, val_df, test_df)
 
             # Calculate activity groups from training data
             activity_map = get_activity_group_map(train_df, user_ids)
 
             result = run_pipeline(
                 train_matrix,
+                val_matrix,
                 test_matrix,
                 user_ids,
                 item_ids,

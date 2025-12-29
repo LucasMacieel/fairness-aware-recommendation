@@ -7,7 +7,7 @@ def plot_pairwise_pareto(solutions, dataset_name, output_dir="plots"):
     """
     Plots pairwise comparisons of objectives for the NSGA-II Pareto front.
 
-    solutions: list of tuples (mdcg, gender_gap, item_coverage)
+    solutions: list of tuples (mdcg, activity_gap, item_coverage)
     dataset_name: str, name of the dataset for titling/saving
     output_dir: str, directory to save the plots
     """
@@ -21,7 +21,7 @@ def plot_pairwise_pareto(solutions, dataset_name, output_dir="plots"):
 
     objectives = {
         "MDCG": [s[0] for s in solutions],
-        "Gender Gap": [s[1] for s in solutions],
+        "Activity Gap": [s[1] for s in solutions],
         "Item Coverage": [s[2] for s in solutions],
     }
 

@@ -1,6 +1,6 @@
 import numpy as np
 import copy
-from metrics import calculate_activity_gap_indexed, calculate_item_coverage_simple
+from metrics import calculate_activity_gap, calculate_item_coverage_simple
 
 
 class GeneticRecommender:
@@ -66,11 +66,13 @@ class GeneticRecommender:
         """
         Calculates fitness based on objective functions.
 
-        ORACULAR SETTING:
-        Both the DCG numerator and IDCG denominator are computed from the TEST SET.
-        This allows fair comparison between baseline and GA/NSGA-II methods.
-        The GA optimizes ground-truth relevance while being normalized by ground-truth
-        ideal rankings - this is acceptable in a re-ranking evaluation scenario.
+        OPTIMIZATION SETTING:
+        - DCG numerator: Computed from target_matrix (validation set during optimization)
+        - IDCG denominator: Pre-calculated from target_matrix via set_user_idcg_values()
+
+        This ensures the GA optimizes on validation set ground-truth relevance,
+        while final evaluation is performed separately on the held-out test set.
+        Both baseline and GA/NSGA-II use the same IDCG normalization approach.
         """
         # 1. Decode to get recommendations
         recs_indices = self.decode(individual)
@@ -108,8 +110,10 @@ class GeneticRecommender:
 
         mean_mdcg = np.mean(ndcg_scores)
 
-        # 2. Activity Gap - using centralized function for consistency
-        activity_gap = calculate_activity_gap_indexed(ndcg_scores, self.activity_map)
+        # 2. Activity Gap - using centralized function for consistency (verbose=False during optimization)
+        activity_gap = calculate_activity_gap(
+            ndcg_scores, self.activity_map, verbose=False
+        )
 
         # 3. Item Coverage - using centralized function for consistency
         item_coverage = calculate_item_coverage_simple(recs_indices, self.item_ids)

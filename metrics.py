@@ -46,59 +46,35 @@ def calculate_ndcg_scores(original_matrix, prediction_matrix, k=20):
     return ndcg_scores
 
 
-def calculate_activity_gap(ndcg_scores, user_ids, activity_map):
+def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=True):
     """
     Calculates the Activity Gap between Active and Inactive users using NDCG.
     Gap = |Avg(NDCG_active) - Avg(NDCG_inactive)|
 
-    Use this function when you have the original user_ids mapping (e.g., baseline evaluation).
-    For GA/NSGA-II internal fitness with index-based mapping, use calculate_activity_gap_indexed().
+    This unified function handles both:
+    - Original user_id mapping (when user_ids is provided)
+    - Index-based mapping (when user_ids is None, activity_map uses indices as keys)
 
     Args:
         ndcg_scores: list of NDCG scores corresponding to user indices
-        user_ids: list of original user IDs (maps index -> user_id)
-        activity_map: dict {user_id: 'active'/'inactive'}
-    """
-    active_scores = []
-    inactive_scores = []
+        activity_map: dict mapping to 'active'/'inactive'. Keys are:
+            - user_ids (original IDs) if user_ids parameter is provided
+            - user indices (0, 1, 2, ...) if user_ids is None
+        user_ids: Optional list of original user IDs (maps index -> user_id).
+            If None, activity_map is assumed to use indices as keys.
+        verbose: If True, print fairness analysis summary
 
-    for idx, user_id in enumerate(user_ids):
-        score = ndcg_scores[idx]
-        group = activity_map.get(user_id, "inactive")
-
-        if group == "active":
-            active_scores.append(score)
-        else:
-            inactive_scores.append(score)
-
-    avg_active = np.mean(active_scores) if active_scores else 0.0
-    avg_inactive = np.mean(inactive_scores) if inactive_scores else 0.0
-
-    print(
-        f"Fairness Analysis: Active Avg: {avg_active:.4f} (n={len(active_scores)}), Inactive Avg: {avg_inactive:.4f} (n={len(inactive_scores)})"
-    )
-
-    activity_gap = abs(avg_active - avg_inactive)
-    return activity_gap
-
-
-def calculate_activity_gap_indexed(ndcg_scores, activity_map):
-    """
-    Calculates the Activity Gap using index-based activity_map (for GA/NSGA-II internal fitness).
-
-    Use this function during GA/NSGA-II optimization where activity_map is pre-converted
-    to index-based format. For baseline/test evaluation with original user IDs,
-    use calculate_activity_gap().
-
-    Args:
-        ndcg_scores: list of NDCG scores indexed by user position
-        activity_map: dict {user_index: 'active'/'inactive'}
+    Returns:
+        float: Absolute difference between active and inactive group average NDCG
     """
     active_scores = []
     inactive_scores = []
 
     for idx, score in enumerate(ndcg_scores):
-        group = activity_map.get(idx, "inactive")
+        # Use user_id as key if provided, otherwise use index
+        key = user_ids[idx] if user_ids is not None else idx
+        group = activity_map.get(key, "inactive")
+
         if group == "active":
             active_scores.append(score)
         else:
@@ -106,6 +82,12 @@ def calculate_activity_gap_indexed(ndcg_scores, activity_map):
 
     avg_active = np.mean(active_scores) if active_scores else 0.0
     avg_inactive = np.mean(inactive_scores) if inactive_scores else 0.0
+
+    if verbose:
+        print(
+            f"Fairness Analysis: Active Avg: {avg_active:.4f} (n={len(active_scores)}), "
+            f"Inactive Avg: {avg_inactive:.4f} (n={len(inactive_scores)})"
+        )
 
     return abs(avg_active - avg_inactive)
 
