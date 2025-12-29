@@ -2,12 +2,8 @@ import numpy as np
 import random
 import pandas as pd
 from data_processing import (
-    get_movielens_100k_data_numpy,
-    get_movielens_100k_gender_map,
     get_movielens_1m_data_numpy,
     get_movielens_1m_gender_map,
-    get_electronics_data_numpy,
-    get_electronics_gender_map,
 )
 from metrics import (
     calculate_gender_gap,
@@ -306,19 +302,7 @@ def main():
 
     datasets = []
 
-    # 1. MovieLens 100k
-    try:
-        datasets.append(
-            {
-                "name": "MovieLens 100k",
-                "loader": get_movielens_100k_data_numpy,
-                "gender_loader": get_movielens_100k_gender_map,
-            }
-        )
-    except Exception as e:
-        print(f"Error configuring MovieLens 100k: {e}")
-
-    # 2. MovieLens 1M
+    # MovieLens 1M
     try:
         datasets.append(
             {
@@ -329,18 +313,6 @@ def main():
         )
     except Exception as e:
         print(f"Error configuring MovieLens 1M: {e}")
-
-    # 3. Electronics Data
-    try:
-        datasets.append(
-            {
-                "name": "Electronics Data",
-                "loader": get_electronics_data_numpy,
-                "gender_loader": get_electronics_gender_map,
-            }
-        )
-    except Exception as e:
-        print(f"Error configuring Electronics Data: {e}")
 
     all_results = []
     k_ndcg = 10
