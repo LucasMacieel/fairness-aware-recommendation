@@ -3,7 +3,7 @@ import warnings
 
 # --- Module-Level Constants ---
 # Single source of truth for default weights used by GA/NSGA-II
-DEFAULT_WEIGHTS = {"mdcg": 1.0, "activity_gap": 1.0, "item_coverage": 1.0}
+DEFAULT_WEIGHTS = {"mdcg": 1.0, "activity_gap": 1.0, "item_entropy": 1.0}
 
 
 def dcg_at_k(r, k):
@@ -88,28 +88,61 @@ def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=Tru
     return abs(avg_active - avg_inactive)
 
 
-def calculate_item_coverage_simple(recs_indices, item_ids):
+def calculate_shannon_entropy(recs_indices, num_items):
     """
-    Calculate item coverage ratio from recommendation indices.
+    Calculate normalized Shannon entropy of item recommendations.
+
+    Shannon entropy measures how evenly distributed recommendations are across items.
+    Higher entropy = more diverse/uniform distribution (better for long-tail exposure).
+    Lower entropy = concentration on fewer items (popularity bias).
 
     Args:
         recs_indices: array of shape (num_users, k) with item indices
-        item_ids: list of all item IDs in the dataset (must be unique)
+        num_items: total number of items in the catalog
+
+    Returns:
+        float: normalized entropy in [0, 1] where 1 = perfectly uniform distribution
+    """
+    # Flatten and count occurrences of each item
+    flat_recs = recs_indices.flatten()
+    item_counts = np.bincount(flat_recs, minlength=num_items)
+
+    # Filter to only recommended items (non-zero counts)
+    non_zero_counts = item_counts[item_counts > 0]
+
+    if len(non_zero_counts) <= 1:
+        return 0.0  # No diversity if 0 or 1 unique items
+
+    # Calculate probabilities
+    total_recs = len(flat_recs)
+    probabilities = non_zero_counts / total_recs
+
+    # Shannon entropy: H = -sum(p * log2(p))
+    entropy = -np.sum(probabilities * np.log2(probabilities))
+
+    # Normalize by maximum possible entropy (uniform over all recommended items)
+    max_entropy = np.log2(len(non_zero_counts))
+
+    return entropy / max_entropy if max_entropy > 0 else 0.0
+
+
+def calculate_item_coverage(recs_indices, num_items):
+    """
+    Calculate item coverage ratio (secondary diagnostic metric).
+
+    Coverage measures what fraction of the catalog gets recommended at least once.
+    This is a complementary metric to entropy - coverage tells you breadth,
+    entropy tells you distribution uniformity.
+
+    Args:
+        recs_indices: array of shape (num_users, k) with item indices
+        num_items: total number of items in the catalog
 
     Returns:
         float: coverage ratio (unique recommended items / total items)
-
-    Raises:
-        AssertionError: if item_ids contains duplicates
     """
-    # Validate that item_ids has no duplicates to ensure correct coverage calculation
-    assert len(item_ids) == len(set(item_ids)), (
-        f"item_ids must be unique. Found {len(item_ids)} items but only {len(set(item_ids))} unique."
-    )
-
-    # Vectorized: flatten all indices and count unique
     unique_indices = np.unique(recs_indices.flatten())
-    return len(unique_indices) / len(item_ids) if len(item_ids) > 0 else 0.0
+    return len(unique_indices) / num_items if num_items > 0 else 0.0
 
 
 def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
@@ -184,21 +217,21 @@ def get_user_ideal_dcg_from_candidates(ground_truth_matrix, candidate_lists, top
     return np.array(idcg_scores)
 
 
-def compute_weighted_score(mdcg, activity_gap, item_coverage, weights):
+def compute_weighted_score(mdcg, activity_gap, item_entropy, weights):
     """
     Compute the combined weighted fitness score.
 
     This is the single source of truth for the weighted scoring formula:
-    score = (w_mdcg * MDCG) - (w_gap * Gap) + (w_cov * Coverage)
+    score = (w_mdcg * MDCG) - (w_gap * Gap) + (w_entropy * Entropy)
 
-    - MDCG and Coverage are ADDED (higher is better)
+    - MDCG and Entropy are ADDED (higher is better)
     - Activity Gap is SUBTRACTED (lower is better)
 
     Args:
         mdcg: Mean normalized DCG score
         activity_gap: Absolute difference in NDCG between active/inactive groups
-        item_coverage: Ratio of unique items recommended
-        weights: dict with keys 'mdcg', 'activity_gap', 'item_coverage'
+        item_entropy: Normalized Shannon entropy of item recommendations [0, 1]
+        weights: dict with keys 'mdcg', 'activity_gap', 'item_entropy'
 
     Returns:
         float: Combined weighted score
@@ -206,5 +239,5 @@ def compute_weighted_score(mdcg, activity_gap, item_coverage, weights):
     return (
         (weights["mdcg"] * mdcg)
         - (weights["activity_gap"] * activity_gap)
-        + (weights["item_coverage"] * item_coverage)
+        + (weights["item_entropy"] * item_entropy)
     )

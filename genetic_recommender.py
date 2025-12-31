@@ -3,7 +3,7 @@ import copy
 from metrics import (
     DEFAULT_WEIGHTS,
     calculate_activity_gap,
-    calculate_item_coverage_simple,
+    calculate_shannon_entropy,
     compute_weighted_score,
 )
 
@@ -30,7 +30,7 @@ class GeneticRecommender:
         activity_map: dict mapping user_id -> 'active'/'inactive' (uses user_ids as keys)
         user_ids: list of original user IDs (index -> user_id mapping). Required for
                   consistent activity_gap calculation with main.py evaluation.
-        weights: dict with keys 'mdcg', 'activity_gap', 'item_coverage'.
+        weights: dict with keys 'mdcg', 'activity_gap', 'item_entropy'.
                  For GA: Used directly in fitness optimization (weighted sum).
                  For NSGA-II: Only used post-hoc to select representative solution from Pareto front.
                  Defaults to DEFAULT_WEIGHTS from metrics.py.
@@ -121,7 +121,9 @@ class GeneticRecommender:
 
         # Avoid division by zero: where IDCG is 0, NDCG is 0
         idcg = self.user_idcg_values
-        ndcg_scores = np.where(idcg > 0, dcg_values / idcg, 0.0)
+        ndcg_scores = np.divide(
+            dcg_values, idcg, out=np.zeros_like(dcg_values), where=idcg > 0
+        )
 
         mean_mdcg = np.mean(ndcg_scores)
 
@@ -130,15 +132,15 @@ class GeneticRecommender:
             ndcg_scores, self.activity_map, user_ids=self.user_ids, verbose=False
         )
 
-        # 3. Item Coverage - using centralized function for consistency
-        item_coverage = calculate_item_coverage_simple(recs_indices, self.item_ids)
+        # 3. Item Entropy (Shannon) - using centralized function for consistency
+        item_entropy = calculate_shannon_entropy(recs_indices, self.num_items)
 
         # Use centralized weighted score function for consistency with main.py evaluation
         score = compute_weighted_score(
-            mean_mdcg, activity_gap, item_coverage, self.weights
+            mean_mdcg, activity_gap, item_entropy, self.weights
         )
 
-        return score, mean_mdcg, activity_gap, item_coverage
+        return score, mean_mdcg, activity_gap, item_entropy
 
     def crossover(self, parent1, parent2):
         """
@@ -287,7 +289,7 @@ class GeneticRecommender:
             current_best_ind = population[best_idx]
             current_best_metrics = fitness_results[
                 best_idx
-            ]  # (score, mdcg, activity_gap, item_coverage)
+            ]  # (score, mdcg, activity_gap, item_entropy)
 
             if max_score > best_score:
                 best_score = max_score
@@ -296,7 +298,7 @@ class GeneticRecommender:
             history.append(current_best_metrics)
 
             print(
-                f"Gen {gen}: Best Score={max_score:.4f}, MDCG={current_best_metrics[1]:.4f}, Activity Gap={current_best_metrics[2]:.4f}, Item Coverage={current_best_metrics[3]:.4f}"
+                f"Gen {gen}: Best Score={max_score:.4f}, MDCG={current_best_metrics[1]:.4f}, Activity Gap={current_best_metrics[2]:.4f}, Item Entropy={current_best_metrics[3]:.4f}"
             )
 
             # Selection
@@ -368,7 +370,7 @@ class NsgaIIRecommender(GeneticRecommender):
     def fast_non_dominated_sort(self, population_metrics):
         """
         Sorts the population into fronts.
-        population_metrics: list of tuples (score, mdcg, activity_gap, item_coverage)
+        population_metrics: list of tuples (score, mdcg, activity_gap, item_entropy)
         We want to:
          - Maximize MDCG -> Minimize -MDCG
          - Minimize Activity Gap
@@ -383,10 +385,10 @@ class NsgaIIRecommender(GeneticRecommender):
         # Convert to minimization problem
         objectives = []
         for m in population_metrics:
-            # m = (score, mdcg, activity_gap, item_coverage)
+            # m = (score, mdcg, activity_gap, item_entropy)
             # Obj 1: -MDCG
             # Obj 2: Activity Gap
-            # Obj 3: -Item Coverage
+            # Obj 3: -Item Entropy
             objectives.append([-m[1], m[2], -m[3]])
 
         objectives = np.array(objectives)
@@ -592,7 +594,7 @@ class NsgaIIRecommender(GeneticRecommender):
             history.append(current_best_metrics)
 
             print(
-                f"Gen {gen} (NSGA-II): Best Weighted Score={current_best_metrics[0]:.4f}, MDCG={current_best_metrics[1]:.4f}, Gap={current_best_metrics[2]:.4f}, Cov={current_best_metrics[3]:.4f}"
+                f"Gen {gen} (NSGA-II): Best Weighted Score={current_best_metrics[0]:.4f}, MDCG={current_best_metrics[1]:.4f}, Gap={current_best_metrics[2]:.4f}, Entropy={current_best_metrics[3]:.4f}"
             )
 
         # Return the Pareto Front (Rank 0)

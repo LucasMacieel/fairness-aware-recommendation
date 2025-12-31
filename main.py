@@ -13,7 +13,8 @@ from data_processing import (
 from metrics import (
     DEFAULT_WEIGHTS,
     calculate_activity_gap,
-    calculate_item_coverage_simple,
+    calculate_item_coverage,
+    calculate_shannon_entropy,
     calculate_user_ndcg_scores,
     compute_weighted_score,
     get_user_ideal_dcg_from_candidates,
@@ -33,12 +34,9 @@ from cache import (
 # --- Module-Level Constants ---
 # Centralized for consistency across the pipeline
 SEED = 42
-CANDIDATE_SIZE = 50  # Number of candidates per user for re-ranking
-SVD_K_FACTORS = (
-    20  # Latent factors for SVD (capped internally by perform_svd if needed)
-)
-POP_SIZE = 50  # Population size for GA/NSGA-II
-GENERATIONS = 5  # Number of generations for evolution
+CANDIDATE_SIZE = 100  # Number of candidates per user for re-ranking
+POP_SIZE = 100  # Population size for GA/NSGA-II
+GENERATIONS = 10  # Number of generations for evolution
 K_NDCG = 10  # Top-K for NDCG evaluation
 
 
@@ -107,6 +105,7 @@ def run_pipeline(
         "Dataset": dataset_name,
         "Users": train_matrix.shape[0],
         "Items": train_matrix.shape[1],
+        "Sparsity": 1 - (np.count_nonzero(train_matrix) / train_matrix.size),
     }
 
     # --- Generate Candidate Lists FIRST (needed for IDCG and baseline comparison) ---
@@ -164,17 +163,20 @@ def run_pipeline(
     else:
         baseline_activity_gap = 0.0  # Default if no map
 
-    # Item Coverage - using centralized function
-    baseline_item_coverage = calculate_item_coverage_simple(
-        baseline_recs_indices, item_ids
-    )
+    # Item Entropy - using centralized function
+    num_items = len(item_ids)
+    baseline_item_entropy = calculate_shannon_entropy(baseline_recs_indices, num_items)
+    # Item Coverage - secondary diagnostic metric
+    baseline_item_coverage = calculate_item_coverage(baseline_recs_indices, num_items)
 
     results["Baseline MDCG"] = baseline_mdcg
     results["Baseline Activity Gap"] = baseline_activity_gap
+    results["Baseline Item Entropy"] = baseline_item_entropy
     results["Baseline Item Coverage"] = baseline_item_coverage
 
     print(
-        f"Baseline (Test Set): MDCG={baseline_mdcg:.4f}, Activity Gap={baseline_activity_gap:.4f}, Item Coverage={baseline_item_coverage:.4f}"
+        f"Baseline (Test Set): MDCG={baseline_mdcg:.4f}, Activity Gap={baseline_activity_gap:.4f}, "
+        f"Item Entropy={baseline_item_entropy:.4f}, Item Coverage={baseline_item_coverage:.4f}"
     )
 
     # --- Genetic Algorithm ---
@@ -228,17 +230,21 @@ def run_pipeline(
     else:
         ga_test_activity_gap = 0.0
 
-    # --- Unified Item Coverage Calculation ---
+    # --- Unified Item Entropy Calculation ---
     # Using centralized function for consistency
-    ga_test_cov_ratio = calculate_item_coverage_simple(ga_recs_indices, item_ids)
+    ga_test_entropy = calculate_shannon_entropy(ga_recs_indices, num_items)
+    # Item Coverage - secondary diagnostic metric
+    ga_test_coverage = calculate_item_coverage(ga_recs_indices, num_items)
 
     print(
-        f"GA Result (Test Set): MDCG={ga_test_mdcg:.4f}, Activity Gap={ga_test_activity_gap:.4f}, Item Coverage={ga_test_cov_ratio:.4f}"
+        f"GA Result (Test Set): MDCG={ga_test_mdcg:.4f}, Activity Gap={ga_test_activity_gap:.4f}, "
+        f"Item Entropy={ga_test_entropy:.4f}, Item Coverage={ga_test_coverage:.4f}"
     )
 
     results["GA MDCG"] = ga_test_mdcg
     results["GA Activity Gap"] = ga_test_activity_gap
-    results["GA Item Coverage"] = ga_test_cov_ratio
+    results["GA Item Entropy"] = ga_test_entropy
+    results["GA Item Coverage"] = ga_test_coverage
 
     # --- NSGA-II Algorithm ---
     print(f"\nRunning NSGA-II for {dataset_name}...")
@@ -280,7 +286,8 @@ def run_pipeline(
     best_nsga_test_score = -np.inf
     best_nsga_test_mdcg = 0.0
     best_nsga_test_gap = 0.0
-    best_nsga_test_cov = 0.0
+    best_nsga_test_entropy = 0.0
+    best_nsga_test_coverage = 0.0
 
     for ind in pareto_front:
         # Evaluate this individual on the test set using TEST IDCG
@@ -298,11 +305,13 @@ def run_pipeline(
         else:
             test_gap = 0.0
 
-        # Calculate item coverage on test - using centralized function
-        test_cov = calculate_item_coverage_simple(recs_indices, item_ids)
+        # Calculate item entropy on test - using centralized function
+        test_entropy = calculate_shannon_entropy(recs_indices, num_items)
+        # Item Coverage - secondary diagnostic metric
+        test_coverage = calculate_item_coverage(recs_indices, num_items)
 
         # Store for Pareto statistics
-        pareto_test_results.append((test_mdcg, test_gap, test_cov))
+        pareto_test_results.append((test_mdcg, test_gap, test_entropy, test_coverage))
 
         # --- DESIGN NOTE: Weighted Selection for Representative Solution ---
         # NSGA-II produces a Pareto front of non-dominated solutions (trade-offs).
@@ -310,19 +319,21 @@ def run_pipeline(
         # This weighted sum is ONLY for that purpose - it does NOT undermine the multi-objective optimization.
         # The full Pareto front diversity is reported separately below (min/max/mean for each metric).
         # Users can choose different solutions from the Pareto front based on their priorities.
-        test_score = compute_weighted_score(test_mdcg, test_gap, test_cov, weights)
+        test_score = compute_weighted_score(test_mdcg, test_gap, test_entropy, weights)
 
         if test_score > best_nsga_test_score:
             best_nsga_test_score = test_score
             best_nsga_test_mdcg = test_mdcg
             best_nsga_test_gap = test_gap
-            best_nsga_test_cov = test_cov
+            best_nsga_test_entropy = test_entropy
+            best_nsga_test_coverage = test_coverage
 
     # --- Report Pareto Front Statistics (shows trade-off diversity) ---
     if pareto_test_results:
         mdcg_vals = [r[0] for r in pareto_test_results]
         gap_vals = [r[1] for r in pareto_test_results]
-        cov_vals = [r[2] for r in pareto_test_results]
+        entropy_vals = [r[2] for r in pareto_test_results]
+        coverage_vals = [r[3] for r in pareto_test_results]
         print(
             f"\n--- Pareto Front Trade-offs on Test Set ({len(pareto_test_results)} solutions) ---"
         )
@@ -333,20 +344,26 @@ def run_pipeline(
             f"  Gap:      min={min(gap_vals):.4f}, max={max(gap_vals):.4f}, mean={np.mean(gap_vals):.4f}, std={np.std(gap_vals):.4f}"
         )
         print(
-            f"  Coverage: min={min(cov_vals):.4f}, max={max(cov_vals):.4f}, mean={np.mean(cov_vals):.4f}, std={np.std(cov_vals):.4f}"
+            f"  Entropy:  min={min(entropy_vals):.4f}, max={max(entropy_vals):.4f}, mean={np.mean(entropy_vals):.4f}, std={np.std(entropy_vals):.4f}"
+        )
+        print(
+            f"  Coverage: min={min(coverage_vals):.4f}, max={max(coverage_vals):.4f}, mean={np.mean(coverage_vals):.4f}, std={np.std(coverage_vals):.4f}"
         )
 
     nsga_test_mdcg = best_nsga_test_mdcg
     nsga_test_activity_gap = best_nsga_test_gap
-    nsga_test_cov_ratio = best_nsga_test_cov
+    nsga_test_entropy = best_nsga_test_entropy
+    nsga_test_coverage = best_nsga_test_coverage
 
     print(
-        f"\nNSGA-II Result (Best Weighted on Test Set): MDCG={nsga_test_mdcg:.4f}, Activity Gap={nsga_test_activity_gap:.4f}, Item Coverage={nsga_test_cov_ratio:.4f}"
+        f"\nNSGA-II Result (Best Weighted on Test Set): MDCG={nsga_test_mdcg:.4f}, Activity Gap={nsga_test_activity_gap:.4f}, "
+        f"Item Entropy={nsga_test_entropy:.4f}, Item Coverage={nsga_test_coverage:.4f}"
     )
 
     results["NSGA-II MDCG"] = nsga_test_mdcg
     results["NSGA-II Activity Gap"] = nsga_test_activity_gap
-    results["NSGA-II Item Coverage"] = nsga_test_cov_ratio
+    results["NSGA-II Item Entropy"] = nsga_test_entropy
+    results["NSGA-II Item Coverage"] = nsga_test_coverage
 
     return results
 
