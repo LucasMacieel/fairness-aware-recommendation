@@ -3,6 +3,8 @@ import random
 import pandas as pd
 from data_processing import (
     load_movielens_1m_surprise,
+    load_movielens_100k_surprise,
+    load_book_crossing,
     df_to_surprise_trainset,
     split_train_val_test_stratified,
     create_aligned_matrices_3way,
@@ -42,6 +44,7 @@ def run_pipeline(
     train_df,
     dataset_name,
     k_ndcg=K_NDCG,
+    rating_scale=(1, 5),
 ):
     """
     Run the recommendation pipeline with train/validation/test split.
@@ -50,6 +53,7 @@ def run_pipeline(
     - val_matrix: Used for GA/NSGA-II optimization (ground truth during optimization)
     - test_matrix: Used for final unbiased evaluation only
     - train_df: Training DataFrame needed for Surprise SVD training
+    - rating_scale: Tuple of (min_rating, max_rating) for the dataset
     """
     # Note: Random seed is set once in main() before data loading for full reproducibility.
     # No need to re-seed here as it would reset the random state mid-pipeline.
@@ -68,7 +72,7 @@ def run_pipeline(
     )
 
     # Note: perform_svd internally caps k to min(matrix.shape) - 1 if needed
-    trainset = df_to_surprise_trainset(train_df)
+    trainset = df_to_surprise_trainset(train_df, rating_scale=rating_scale)
     svd_model = train_svd_surprise(trainset, random_state=SEED)
     print("SVD Training Complete.")
 
@@ -343,6 +347,41 @@ def main():
     all_results = []
     k_ndcg = K_NDCG  # Use module-level constant
 
+     # MovieLens 100k - Using Surprise's built-in dataset
+    try:
+        print("\n--- Loading MovieLens 100k (Surprise built-in) ---")
+        _, df = load_movielens_100k_surprise()
+        train_df, val_df, test_df = split_train_val_test_stratified(df)
+        (
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+        ) = create_aligned_matrices_3way(train_df, val_df, test_df)
+
+        # Calculate activity groups from training data
+        activity_map = get_activity_group_map(train_df, user_ids)
+
+        result = run_pipeline(
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            "MovieLens 100k",
+            k_ndcg,
+        )
+        all_results.append(result)
+
+    except Exception as e:
+        print(f"Error processing MovieLens 100k: {e}")
+        import traceback
+
+        traceback.print_exc()
+
     # MovieLens 1M - Using Surprise's built-in dataset
     try:
         print("\n--- Loading MovieLens 1M (Surprise built-in) ---")
@@ -374,6 +413,42 @@ def main():
 
     except Exception as e:
         print(f"Error processing MovieLens 1M: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+    # Book-Crossing dataset
+    try:
+        print("\n--- Loading Book-Crossing Dataset ---")
+        df = load_book_crossing(min_interactions=6)
+        train_df, val_df, test_df = split_train_val_test_stratified(df)
+        (
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+        ) = create_aligned_matrices_3way(train_df, val_df, test_df)
+
+        # Calculate activity groups from training data
+        activity_map = get_activity_group_map(train_df, user_ids)
+
+        result = run_pipeline(
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            "Book-Crossing",
+            k_ndcg,
+            rating_scale=(1, 10),  # Book-Crossing uses 1-10 scale
+        )
+        all_results.append(result)
+
+    except Exception as e:
+        print(f"Error processing Book-Crossing: {e}")
         import traceback
 
         traceback.print_exc()

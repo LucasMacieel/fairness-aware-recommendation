@@ -27,6 +27,107 @@ def load_movielens_1m_surprise():
     return data, df
 
 
+def load_movielens_100k_surprise():
+    """
+    Load MovieLens 100k dataset using Surprise's built-in loader.
+
+    Returns:
+        surprise.Dataset: Surprise dataset object with ML-100k data
+        pd.DataFrame: Full dataset as DataFrame for compatibility with activity_map
+    """
+    # Load the built-in ML-100k dataset
+    data = Dataset.load_builtin("ml-100k")
+
+    # Also get it as a DataFrame for downstream processing
+    df = pd.DataFrame(
+        data.raw_ratings, columns=["user_id", "item_id", "rating", "timestamp"]
+    )
+
+    # Convert types to match existing pipeline expectations
+    df["user_id"] = df["user_id"].astype(str)
+    df["item_id"] = df["item_id"].astype(str)
+    df["rating"] = df["rating"].astype(float)
+
+    return data, df
+
+
+def load_book_crossing(filepath="data/Ratings.csv", min_interactions=5):
+    """
+    Load Book-Crossing dataset from local CSV file with k-core filtering.
+
+    The Book-Crossing dataset uses semicolon-separated values with columns:
+    User-ID, ISBN, Rating (0-10 scale, 0 = implicit rating)
+
+    Args:
+        filepath: Path to the Ratings.csv file
+        min_interactions: Minimum interactions per user AND item (k-core filtering)
+
+    Returns:
+        pd.DataFrame: DataFrame with user_id, item_id, rating columns
+    """
+    import os
+
+    # Find the file
+    if not os.path.exists(filepath):
+        # Try relative paths
+        alt_paths = [
+            os.path.join("data", "Ratings.csv"),
+            os.path.join("..", "data", "Ratings.csv"),
+        ]
+        for alt in alt_paths:
+            if os.path.exists(alt):
+                filepath = alt
+                break
+        else:
+            raise FileNotFoundError(f"Book-Crossing dataset not found at {filepath}")
+
+    # Load the CSV with semicolon separator
+    df = pd.read_csv(filepath, sep=";", encoding="latin-1")
+
+    # Rename columns to match pipeline expectations
+    df = df.rename(
+        columns={"User-ID": "user_id", "ISBN": "item_id", "Book-Rating": "rating"}
+    )
+
+    # Handle potential column name variations
+    if "Rating" in df.columns:
+        df = df.rename(columns={"Rating": "rating"})
+
+    # Convert types
+    df["user_id"] = df["user_id"].astype(str)
+    df["item_id"] = df["item_id"].astype(str)
+    df["rating"] = df["rating"].astype(float)
+
+    # Filter out implicit ratings (rating = 0) for explicit feedback only
+    df = df[df["rating"] > 0]
+    print(f"Book-Crossing: {len(df)} explicit ratings (filtered out rating=0)")
+
+    # Apply k-core filtering iteratively until convergence
+    # Keep only users and items with at least min_interactions
+    prev_len = 0
+    iteration = 0
+    while len(df) != prev_len:
+        prev_len = len(df)
+        iteration += 1
+
+        # Filter users with at least min_interactions
+        user_counts = df["user_id"].value_counts()
+        valid_users = user_counts[user_counts >= min_interactions].index
+        df = df[df["user_id"].isin(valid_users)]
+
+        # Filter items with at least min_interactions
+        item_counts = df["item_id"].value_counts()
+        valid_items = item_counts[item_counts >= min_interactions].index
+        df = df[df["item_id"].isin(valid_items)]
+
+    print(
+        f"Book-Crossing: After {min_interactions}-core filtering: "
+        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
+    )
+
+    return df
+
+
 def df_to_surprise_trainset(df, rating_scale=(1, 5)):
     """
     Convert a pandas DataFrame to a Surprise Trainset.
