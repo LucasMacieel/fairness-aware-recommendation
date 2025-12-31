@@ -21,6 +21,14 @@ from metrics import (
 from recommender import train_svd_surprise, get_predictions_matrix
 from genetic_recommender import GeneticRecommender, NsgaIIRecommender
 from utils.plotter import plot_pairwise_pareto
+from cache import (
+    get_all_matrix_cache_paths,
+    all_matrices_cached,
+    save_matrix,
+    load_matrix,
+    save_metadata,
+    load_metadata,
+)
 
 # --- Module-Level Constants ---
 # Centralized for consistency across the pipeline
@@ -45,6 +53,7 @@ def run_pipeline(
     dataset_name,
     k_ndcg=K_NDCG,
     rating_scale=(1, 5),
+    prediction_matrix=None,
 ):
     """
     Run the recommendation pipeline with train/validation/test split.
@@ -52,8 +61,9 @@ def run_pipeline(
     - train_matrix: Used for SVD training
     - val_matrix: Used for GA/NSGA-II optimization (ground truth during optimization)
     - test_matrix: Used for final unbiased evaluation only
-    - train_df: Training DataFrame needed for Surprise SVD training
+    - train_df: Training DataFrame needed for Surprise SVD training (not needed if prediction_matrix provided)
     - rating_scale: Tuple of (min_rating, max_rating) for the dataset
+    - prediction_matrix: Optional pre-computed prediction matrix (from cache)
     """
     # Note: Random seed is set once in main() before data loading for full reproducibility.
     # No need to re-seed here as it would reset the random state mid-pipeline.
@@ -71,14 +81,20 @@ def run_pipeline(
         f"user_ids length ({num_users_from_ids}) must match matrix rows ({train_matrix.shape[0]})"
     )
 
-    # Note: perform_svd internally caps k to min(matrix.shape) - 1 if needed
-    trainset = df_to_surprise_trainset(train_df, rating_scale=rating_scale)
-    svd_model = train_svd_surprise(trainset, random_state=SEED)
-    print("SVD Training Complete.")
+    # Use pre-computed prediction matrix if provided (from cache)
+    if prediction_matrix is None:
+        # Note: perform_svd internally caps k to min(matrix.shape) - 1 if needed
+        trainset = df_to_surprise_trainset(train_df, rating_scale=rating_scale)
+        svd_model = train_svd_surprise(trainset, random_state=SEED)
+        print("SVD Training Complete.")
 
-    # Generate prediction matrix using trained SVD model
-    prediction_matrix = get_predictions_matrix(svd_model, user_ids, item_ids, trainset)
-    print("Prediction Matrix Generated.")
+        # Generate prediction matrix using trained SVD model
+        prediction_matrix = get_predictions_matrix(
+            svd_model, user_ids, item_ids, trainset
+        )
+        print("Prediction Matrix Generated.")
+    else:
+        print("Using cached prediction matrix.")
 
     # --- Masking Training Items ---
     # We purposefully mask items present in the training set so they are not recommended again.
@@ -336,6 +352,106 @@ def run_pipeline(
     return results
 
 
+def load_or_create_cached_data(
+    dataset_name: str,
+    load_fn,
+    rating_scale=(1, 5),
+    use_cache: bool = True,
+    **load_kwargs,
+):
+    """
+    Load dataset with caching support for matrices and predictions.
+
+    If cache exists and use_cache=True, loads from cache.
+    Otherwise, processes data fresh and saves to cache.
+
+    Args:
+        dataset_name: Name of the dataset (for cache file naming)
+        load_fn: Function to load the raw dataset (returns df or (data, df))
+        rating_scale: Rating scale tuple for Surprise
+        use_cache: Whether to use caching
+        **load_kwargs: Additional kwargs passed to load_fn
+
+    Returns:
+        tuple: (train_matrix, val_matrix, test_matrix, user_ids, item_ids,
+                activity_map, train_df, prediction_matrix_or_None)
+    """
+    cache_paths = get_all_matrix_cache_paths(dataset_name)
+
+    # Check if all data is cached (including prediction matrix)
+    if use_cache and all_matrices_cached(dataset_name, include_prediction=True):
+        print(f"Loading {dataset_name} from cache...")
+
+        train_matrix = load_matrix(cache_paths["train"])
+        val_matrix = load_matrix(cache_paths["val"])
+        test_matrix = load_matrix(cache_paths["test"])
+        prediction_matrix = load_matrix(cache_paths["prediction"])
+
+        user_ids, item_ids, activity_map = load_metadata(dataset_name)
+
+        return (
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            None,  # train_df not needed when using cached prediction
+            prediction_matrix,
+        )
+
+    # Load and process data fresh
+    print(f"Processing {dataset_name} fresh (will cache results)...")
+
+    # Load raw data
+    result = load_fn(**load_kwargs)
+    if isinstance(result, tuple):
+        _, df = result  # Surprise datasets return (data, df)
+    else:
+        df = result  # Book-Crossing returns just df
+
+    # Split data
+    train_df, val_df, test_df = split_train_val_test_stratified(df)
+
+    # Create aligned matrices
+    (
+        train_matrix,
+        val_matrix,
+        test_matrix,
+        user_ids,
+        item_ids,
+    ) = create_aligned_matrices_3way(train_df, val_df, test_df)
+
+    # Calculate activity groups
+    activity_map = get_activity_group_map(train_df, user_ids)
+
+    # Train SVD and generate prediction matrix
+    trainset = df_to_surprise_trainset(train_df, rating_scale=rating_scale)
+    svd_model = train_svd_surprise(trainset, random_state=SEED)
+    prediction_matrix = get_predictions_matrix(svd_model, user_ids, item_ids, trainset)
+    print("SVD Training & Prediction Matrix Generated.")
+
+    # Cache everything if caching is enabled
+    if use_cache:
+        print(f"Caching {dataset_name} data...")
+        save_matrix(train_matrix, cache_paths["train"])
+        save_matrix(val_matrix, cache_paths["val"])
+        save_matrix(test_matrix, cache_paths["test"])
+        save_matrix(prediction_matrix, cache_paths["prediction"])
+        save_metadata(dataset_name, user_ids, item_ids, activity_map)
+
+    return (
+        train_matrix,
+        val_matrix,
+        test_matrix,
+        user_ids,
+        item_ids,
+        activity_map,
+        train_df,
+        prediction_matrix,
+    )
+
+
 def main():
     # Set random seed FIRST before any data loading to ensure full reproducibility.
     # Note: data_processing.py uses pandas random_state=42 internally, but this ensures
@@ -347,21 +463,23 @@ def main():
     all_results = []
     k_ndcg = K_NDCG  # Use module-level constant
 
-     # MovieLens 100k - Using Surprise's built-in dataset
+    # MovieLens 100k - Using Surprise's built-in dataset
     try:
         print("\n--- Loading MovieLens 100k (Surprise built-in) ---")
-        _, df = load_movielens_100k_surprise()
-        train_df, val_df, test_df = split_train_val_test_stratified(df)
         (
             train_matrix,
             val_matrix,
             test_matrix,
             user_ids,
             item_ids,
-        ) = create_aligned_matrices_3way(train_df, val_df, test_df)
-
-        # Calculate activity groups from training data
-        activity_map = get_activity_group_map(train_df, user_ids)
+            activity_map,
+            train_df,
+            prediction_matrix,
+        ) = load_or_create_cached_data(
+            dataset_name="MovieLens 100k",
+            load_fn=load_movielens_100k_surprise,
+            rating_scale=(1, 5),
+        )
 
         result = run_pipeline(
             train_matrix,
@@ -373,6 +491,7 @@ def main():
             train_df,
             "MovieLens 100k",
             k_ndcg,
+            prediction_matrix=prediction_matrix,
         )
         all_results.append(result)
 
@@ -385,18 +504,20 @@ def main():
     # MovieLens 1M - Using Surprise's built-in dataset
     try:
         print("\n--- Loading MovieLens 1M (Surprise built-in) ---")
-        _, df = load_movielens_1m_surprise()
-        train_df, val_df, test_df = split_train_val_test_stratified(df)
         (
             train_matrix,
             val_matrix,
             test_matrix,
             user_ids,
             item_ids,
-        ) = create_aligned_matrices_3way(train_df, val_df, test_df)
-
-        # Calculate activity groups from training data
-        activity_map = get_activity_group_map(train_df, user_ids)
+            activity_map,
+            train_df,
+            prediction_matrix,
+        ) = load_or_create_cached_data(
+            dataset_name="MovieLens 1M",
+            load_fn=load_movielens_1m_surprise,
+            rating_scale=(1, 5),
+        )
 
         result = run_pipeline(
             train_matrix,
@@ -408,6 +529,7 @@ def main():
             train_df,
             "MovieLens 1M",
             k_ndcg,
+            prediction_matrix=prediction_matrix,
         )
         all_results.append(result)
 
@@ -420,18 +542,21 @@ def main():
     # Book-Crossing dataset
     try:
         print("\n--- Loading Book-Crossing Dataset ---")
-        df = load_book_crossing(min_interactions=6)
-        train_df, val_df, test_df = split_train_val_test_stratified(df)
         (
             train_matrix,
             val_matrix,
             test_matrix,
             user_ids,
             item_ids,
-        ) = create_aligned_matrices_3way(train_df, val_df, test_df)
-
-        # Calculate activity groups from training data
-        activity_map = get_activity_group_map(train_df, user_ids)
+            activity_map,
+            train_df,
+            prediction_matrix,
+        ) = load_or_create_cached_data(
+            dataset_name="Book-Crossing",
+            load_fn=load_book_crossing,
+            rating_scale=(1, 10),
+            min_interactions=6,  # Passed to load_book_crossing
+        )
 
         result = run_pipeline(
             train_matrix,
@@ -443,7 +568,8 @@ def main():
             train_df,
             "Book-Crossing",
             k_ndcg,
-            rating_scale=(1, 10),  # Book-Crossing uses 1-10 scale
+            rating_scale=(1, 10),
+            prediction_matrix=prediction_matrix,
         )
         all_results.append(result)
 
