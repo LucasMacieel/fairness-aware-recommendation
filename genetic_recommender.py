@@ -5,7 +5,6 @@ from metrics import (
     calculate_activity_gap,
     calculate_item_coverage_simple,
     compute_weighted_score,
-    dcg_at_k,
 )
 
 
@@ -97,35 +96,32 @@ class GeneticRecommender:
         """
         # 1. Decode to get recommendations
         recs_indices = self.decode(individual)
+        num_users = self.num_users
+        top_k = self.top_k
 
-        ndcg_scores = []
-        for u in range(self.num_users):
-            rec_inds = recs_indices[u]
-            # Get true ratings for these items
-            true_ratings = self.target_matrix[u, rec_inds]
+        # Vectorized DCG computation:
+        # Get all true ratings at once using advanced indexing
+        user_indices = np.arange(num_users)[:, np.newaxis]  # (num_users, 1)
+        true_ratings = self.target_matrix[
+            user_indices, recs_indices
+        ]  # (num_users, top_k)
 
-            relevance = true_ratings  # These are the true ratings of the K items in their current order.
+        # Precompute discount factors once (shared for all users)
+        discount = np.log2(np.arange(2, top_k + 2))  # (top_k,)
 
-            r = np.asarray(relevance, dtype=float)
-            if r.size:
-                dcg = dcg_at_k(r, len(r))  # Use centralized function for consistency
-                # Use pre-calculated Global IDCG - MUST be set for correct comparison
-                if self.user_idcg_values is not None:
-                    idcg = self.user_idcg_values[u]
-                else:
-                    raise ValueError(
-                        "user_idcg_values must be set via set_user_idcg_values() before calling fitness(). "
-                        "Without pre-calculated IDCG, NDCG normalization would be incorrect."
-                    )
+        # Compute DCG for all users: sum(rating / discount) per user
+        dcg_values = np.sum(true_ratings / discount, axis=1)  # (num_users,)
 
-                if idcg > 0:
-                    ndcg = dcg / idcg
-                else:
-                    ndcg = 0.0
-            else:
-                ndcg = 0.0
+        # Compute NDCG using pre-calculated IDCG
+        if self.user_idcg_values is None:
+            raise ValueError(
+                "user_idcg_values must be set via set_user_idcg_values() before calling fitness(). "
+                "Without pre-calculated IDCG, NDCG normalization would be incorrect."
+            )
 
-            ndcg_scores.append(ndcg)
+        # Avoid division by zero: where IDCG is 0, NDCG is 0
+        idcg = self.user_idcg_values
+        ndcg_scores = np.where(idcg > 0, dcg_values / idcg, 0.0)
 
         mean_mdcg = np.mean(ndcg_scores)
 
@@ -542,8 +538,9 @@ class NsgaIIRecommender(GeneticRecommender):
             # 3. Combine R_t = P_t + Q_t
             combined_pop = population + offspring_pop
 
-            # Evaluate all
-            combined_fitness = [self.fitness(ind) for ind in combined_pop]
+            # Evaluate ONLY offspring (parents already have fitness_results from previous gen)
+            offspring_fitness = [self.fitness(ind) for ind in offspring_pop]
+            combined_fitness = fitness_results + offspring_fitness
 
             # 4. Non-Dominated Sort of R_t
             fronts, ranks_combined = self.fast_non_dominated_sort(combined_fitness)

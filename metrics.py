@@ -53,24 +53,20 @@ def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=Tru
             f"user_ids length ({len(user_ids)}) must match ndcg_scores length ({len(ndcg_scores)})"
         )
 
-    active_scores = []
-    inactive_scores = []
-    missing_users_count = 0
+    ndcg_arr = np.asarray(ndcg_scores)
+    num_users = len(ndcg_arr)
 
-    for idx, score in enumerate(ndcg_scores):
-        # Use user_id as key if provided, otherwise use index
-        key = user_ids[idx] if user_ids is not None else idx
+    # Build boolean mask for active users (vectorized lookup)
+    if user_ids is not None:
+        keys = user_ids
+    else:
+        keys = range(num_users)
 
-        if key not in activity_map:
-            missing_users_count += 1
-            group = "inactive"  # Default to inactive for missing users
-        else:
-            group = activity_map[key]
+    active_mask = np.array([activity_map.get(k, "inactive") == "active" for k in keys])
+    missing_users_count = sum(1 for k in keys if k not in activity_map)
 
-        if group == "active":
-            active_scores.append(score)
-        else:
-            inactive_scores.append(score)
+    active_scores = ndcg_arr[active_mask]
+    inactive_scores = ndcg_arr[~active_mask]
 
     # Warn if any users were not found in activity_map
     if missing_users_count > 0:
@@ -80,8 +76,8 @@ def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=Tru
             UserWarning,
         )
 
-    avg_active = np.mean(active_scores) if active_scores else 0.0
-    avg_inactive = np.mean(inactive_scores) if inactive_scores else 0.0
+    avg_active = np.mean(active_scores) if len(active_scores) > 0 else 0.0
+    avg_inactive = np.mean(inactive_scores) if len(inactive_scores) > 0 else 0.0
 
     if verbose:
         print(
@@ -111,11 +107,9 @@ def calculate_item_coverage_simple(recs_indices, item_ids):
         f"item_ids must be unique. Found {len(item_ids)} items but only {len(set(item_ids))} unique."
     )
 
-    unique_items = set()
-    for u in range(recs_indices.shape[0]):
-        for idx in recs_indices[u]:
-            unique_items.add(item_ids[idx])
-    return len(unique_items) / len(item_ids) if len(item_ids) > 0 else 0.0
+    # Vectorized: flatten all indices and count unique
+    unique_indices = np.unique(recs_indices.flatten())
+    return len(unique_indices) / len(item_ids) if len(item_ids) > 0 else 0.0
 
 
 def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):

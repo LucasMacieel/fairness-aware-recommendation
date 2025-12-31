@@ -116,12 +116,11 @@ def run_pipeline(
     # The GA/NSGA-II can only recommend items from the candidate pool, not the full item catalog.
     # This is a design choice to simulate realistic re-ranking scenarios.
     print(f"Generating Top-{CANDIDATE_SIZE} candidates for all methods...")
-    candidate_lists = np.zeros((num_users, CANDIDATE_SIZE), dtype=int)
 
-    for u in range(num_users):
-        scores = masked_prediction_matrix[u]
-        top_indices = np.argsort(scores)[::-1][:CANDIDATE_SIZE]
-        candidate_lists[u] = top_indices
+    # Vectorized argsort: sort ascending then reverse to get descending order
+    # Note: Cannot use -scores because -(-inf) = +inf which would sort first!
+    sorted_indices = np.argsort(masked_prediction_matrix, axis=1)[:, ::-1]
+    candidate_lists = sorted_indices[:, :CANDIDATE_SIZE]
 
     # --- Pre-calculate IDCG from CANDIDATE POOL (Re-ranking Evaluation) ---
     # IMPORTANT: IDCG is computed from only the candidate items, not all items.
