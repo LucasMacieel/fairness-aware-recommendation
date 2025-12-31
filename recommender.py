@@ -1,37 +1,45 @@
 import numpy as np
-from scipy.sparse.linalg import svds
+from surprise import SVD
 
 
-def perform_svd(matrix, k=20):
+def train_svd_surprise(trainset, random_state=42):
     """
-    Performs Singular Value Decomposition on the user-item matrix.
+    Train an SVD model using scikit-surprise.
 
     Args:
-        matrix (np.ndarray): User-Item interaction matrix.
-        k (int): Number of latent factors to keep.
+        trainset: A Surprise Trainset object (from build_full_trainset or train_test_split)
+        n_factors (int): Number of latent factors for SVD
+        random_state (int): Random seed for reproducibility
 
     Returns:
-        prediction_matrix (np.ndarray): The reconstructed matrix with predicted ratings.
+        SVD: Trained SVD model
     """
-    # Normalize by user mean ratings (only considering non-zero ratings)
-    # Create a masked array where 0s are invalid
-    masked_matrix = np.ma.masked_equal(matrix, 0)
-    user_ratings_mean = masked_matrix.mean(axis=1).data
-    matrix_demeaned = matrix - user_ratings_mean.reshape(-1, 1)
+    algo = SVD(random_state=random_state)
+    algo.fit(trainset)
+    return algo
 
-    # Perform SVD
-    # U: User features, sigma: Singular values, Vt: Item features
-    # Check if k is valid for the matrix size
-    k = min(k, min(matrix.shape) - 1)
 
-    U, sigma, Vt = svds(matrix_demeaned, k=k)
+def get_predictions_matrix(algo, user_ids, item_ids, trainset):
+    """
+    Generate a full prediction matrix for all user-item pairs.
 
-    # Convert sigma to diagonal matrix
-    sigma = np.diag(sigma)
+    Args:
+        algo: Trained Surprise SVD model
+        user_ids: List of original user IDs (in matrix row order)
+        item_ids: List of original item IDs (in matrix column order)
+        trainset: The Trainset used for training (needed for inner ID mapping)
 
-    # Reconstruct matrix
-    all_user_predicted_ratings = np.dot(
-        np.dot(U, sigma), Vt
-    ) + user_ratings_mean.reshape(-1, 1)
+    Returns:
+        np.ndarray: Prediction matrix of shape (num_users, num_items)
+    """
+    num_users = len(user_ids)
+    num_items = len(item_ids)
+    prediction_matrix = np.zeros((num_users, num_items))
 
-    return all_user_predicted_ratings
+    for u_idx, uid in enumerate(user_ids):
+        for i_idx, iid in enumerate(item_ids):
+            # Surprise returns prediction with .est attribute
+            pred = algo.predict(uid, iid)
+            prediction_matrix[u_idx, i_idx] = pred.est
+
+    return prediction_matrix

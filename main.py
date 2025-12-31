@@ -2,8 +2,8 @@ import numpy as np
 import random
 import pandas as pd
 from data_processing import (
-    get_movielens_1m_data_path,
-    load_data,
+    load_movielens_1m_surprise,
+    df_to_surprise_trainset,
     split_train_val_test_stratified,
     create_aligned_matrices_3way,
     get_activity_group_map,
@@ -16,7 +16,7 @@ from metrics import (
     compute_weighted_score,
     get_user_ideal_dcg_from_candidates,
 )
-from recommender import perform_svd
+from recommender import train_svd_surprise, get_predictions_matrix
 from genetic_recommender import GeneticRecommender, NsgaIIRecommender
 from utils.plotter import plot_pairwise_pareto
 
@@ -39,6 +39,7 @@ def run_pipeline(
     user_ids,
     item_ids,
     activity_map,
+    train_df,
     dataset_name,
     k_ndcg=K_NDCG,
 ):
@@ -48,6 +49,7 @@ def run_pipeline(
     - train_matrix: Used for SVD training
     - val_matrix: Used for GA/NSGA-II optimization (ground truth during optimization)
     - test_matrix: Used for final unbiased evaluation only
+    - train_df: Training DataFrame needed for Surprise SVD training
     """
     # Note: Random seed is set once in main() before data loading for full reproducibility.
     # No need to re-seed here as it would reset the random state mid-pipeline.
@@ -66,9 +68,13 @@ def run_pipeline(
     )
 
     # Note: perform_svd internally caps k to min(matrix.shape) - 1 if needed
-    print(f"Performing SVD on Train Set with k={SVD_K_FACTORS}...")
-    prediction_matrix = perform_svd(train_matrix, k=SVD_K_FACTORS)
-    print("SVD Complete.")
+    trainset = df_to_surprise_trainset(train_df)
+    svd_model = train_svd_surprise(trainset, random_state=SEED)
+    print("SVD Training Complete.")
+
+    # Generate prediction matrix using trained SVD model
+    prediction_matrix = get_predictions_matrix(svd_model, user_ids, item_ids, trainset)
+    print("Prediction Matrix Generated.")
 
     # --- Masking Training Items ---
     # We purposefully mask items present in the training set so they are not recommended again.
@@ -337,40 +343,35 @@ def main():
     all_results = []
     k_ndcg = K_NDCG  # Use module-level constant
 
-    # MovieLens 1M
+    # MovieLens 1M - Using Surprise's built-in dataset
     try:
-        print("\n--- Loading MovieLens 1M ---")
-        data_path = get_movielens_1m_data_path()
-        if data_path:
-            df = load_data(data_path)
-            train_df, val_df, test_df = split_train_val_test_stratified(df)
-            (
-                train_matrix,
-                val_matrix,
-                test_matrix,
-                user_ids,
-                item_ids,
-            ) = create_aligned_matrices_3way(train_df, val_df, test_df)
+        print("\n--- Loading MovieLens 1M (Surprise built-in) ---")
+        _, df = load_movielens_1m_surprise()
+        train_df, val_df, test_df = split_train_val_test_stratified(df)
+        (
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+        ) = create_aligned_matrices_3way(train_df, val_df, test_df)
 
-            # Calculate activity groups from training data
-            activity_map = get_activity_group_map(train_df, user_ids)
+        # Calculate activity groups from training data
+        activity_map = get_activity_group_map(train_df, user_ids)
 
-            result = run_pipeline(
-                train_matrix,
-                val_matrix,
-                test_matrix,
-                user_ids,
-                item_ids,
-                activity_map,
-                "MovieLens 1M",
-                k_ndcg,
-            )
-            all_results.append(result)
-        else:
-            print("Skipping MovieLens 1M: Data file not found.")
+        result = run_pipeline(
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            "MovieLens 1M",
+            k_ndcg,
+        )
+        all_results.append(result)
 
-    except FileNotFoundError:
-        print("Skipping MovieLens 1M: Data file not found.")
     except Exception as e:
         print(f"Error processing MovieLens 1M: {e}")
         import traceback
@@ -379,12 +380,12 @@ def main():
 
     # Display Results as Pandas DataFrame
     if all_results:
-        df = pd.DataFrame(all_results)
+        results_df = pd.DataFrame(all_results)
 
         print("\n\n" + "=" * 130)
         print(f"{'DATASET COMPARISON (Baseline vs GA - TEST SET)':^130}")
         print("=" * 130)
-        print(df.to_string())
+        print(results_df.to_string())
         print("=" * 130)
 
 

@@ -1,27 +1,46 @@
 import pandas as pd
-import os
+from surprise import Dataset, Reader
 
 
-def load_data(filepath):
+def load_movielens_1m_surprise():
     """
-    Loads MovieLens 1M data from the specified filepath.
-
-    NOTE: This loader is specifically designed for MovieLens 1M format (ratings.dat)
-    which uses '::' as separator. For other datasets, create a separate loader function
-    or modify this function to accept a 'sep' parameter.
-
-    Expected format: user_id::item_id::rating::timestamp
-
-    Args:
-        filepath: Path to the ratings.dat file
+    Load MovieLens 1M dataset using Surprise's built-in loader.
 
     Returns:
-        DataFrame with columns: user_id, item_id, rating, timestamp
+        surprise.Dataset: Surprise dataset object with ML-1M data
+        pd.DataFrame: Full dataset as DataFrame for compatibility with activity_map
     """
-    column_names = ["user_id", "item_id", "rating", "timestamp"]
-    sep = "::"
-    df = pd.read_csv(filepath, sep=sep, names=column_names, engine="python")
-    return df
+    # Load the built-in ML-1M dataset
+    data = Dataset.load_builtin("ml-1m")
+
+    # Also get it as a DataFrame for downstream processing
+    # Surprise stores the data internally, we need to extract it
+    df = pd.DataFrame(
+        data.raw_ratings, columns=["user_id", "item_id", "rating", "timestamp"]
+    )
+
+    # Convert types to match existing pipeline expectations
+    df["user_id"] = df["user_id"].astype(str)
+    df["item_id"] = df["item_id"].astype(str)
+    df["rating"] = df["rating"].astype(float)
+
+    return data, df
+
+
+def df_to_surprise_trainset(df, rating_scale=(1, 5)):
+    """
+    Convert a pandas DataFrame to a Surprise Trainset.
+
+    Args:
+        df: DataFrame with user_id, item_id, rating columns
+        rating_scale: Tuple of (min_rating, max_rating)
+
+    Returns:
+        surprise.Trainset: Trainset object for training
+    """
+    reader = Reader(rating_scale=rating_scale)
+    data = Dataset.load_from_df(df[["user_id", "item_id", "rating"]], reader)
+    return data.build_full_trainset()
 
 
 def split_train_val_test_stratified(df, val_ratio=0.2, test_ratio=0.2, seed=42):
@@ -169,36 +188,11 @@ def get_activity_group_map(train_df, user_ids, top_percentile=0.05):
     return activity_map
 
 
-def _find_data_file(subfolder, filename):
-    """
-    Generic helper to locate data files.
-    Searches in:
-      - data/<subfolder>/<filename>
-      - ../data/<subfolder>/<filename>
-      - data/<filename> (fallback)
-    """
-    possible_paths = [
-        os.path.join("data", subfolder, filename),
-        os.path.join("..", "data", subfolder, filename),
-        os.path.join("data", filename),
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    return None
-
-
-def get_movielens_1m_data_path():
-    """Locates the data file in data/ml-1m."""
-    return _find_data_file("ml-1m", "ratings.dat")
-
-
 def main():
-    print("Testing ML-1M Data Loading...")
+    """Test the Surprise-based ML-1M data loading."""
+    print("Testing ML-1M Data Loading (Surprise)...")
     try:
-        # Load data and test the 3-way split
-        data_path = get_movielens_1m_data_path()
-        df = load_data(data_path)
+        _, df = load_movielens_1m_surprise()
         train_df, val_df, test_df = split_train_val_test_stratified(df)
         train_mat, val_mat, test_mat, u, i = create_aligned_matrices_3way(
             train_df, val_df, test_df
