@@ -38,6 +38,8 @@ CANDIDATE_SIZE = 100  # Number of candidates per user for re-ranking
 POP_SIZE = 100  # Population size for GA/NSGA-II
 GENERATIONS = 10  # Number of generations for evolution
 K_NDCG = 10  # Top-K for NDCG evaluation
+CROSSOVER_RATE = 0.8  # Crossover probability for genetic operators
+MUTATION_RATE = 0.2  # Mutation probability for genetic operators
 
 
 def run_pipeline(
@@ -70,6 +72,9 @@ def run_pipeline(
     print(f"Train Matrix Shape: {train_matrix.shape}")
     print(f"Validation Matrix Shape: {val_matrix.shape}")
     print(f"Test Matrix Shape: {test_matrix.shape}")
+    print(
+        f"GA Parameters: Pop={POP_SIZE}, Gen={GENERATIONS}, Crossover={CROSSOVER_RATE}, Mutation={MUTATION_RATE}, Candidates={CANDIDATE_SIZE}, Top-K={k_ndcg}"
+    )
 
     # --- Validate user_ids ordering matches matrix indices ---
     # This is critical for ensuring activity_map lookups are consistent.
@@ -212,7 +217,12 @@ def run_pipeline(
     # Inject the validation-set IDCG values for optimization
     ga.set_user_idcg_values(val_user_idcg_scores)
 
-    best_ind, history = ga.run(generations=GENERATIONS, pop_size=POP_SIZE)
+    best_ind, history = ga.run(
+        generations=GENERATIONS,
+        pop_size=POP_SIZE,
+        crossover_rate=CROSSOVER_RATE,
+        mutation_rate=MUTATION_RATE,
+    )
 
     # --- Final Evaluation of GA on Test Set ---
     # We take the best individual (list of indices) and evaluate against Test Matrix.
@@ -263,7 +273,12 @@ def run_pipeline(
     # Inject validation-set IDCG for optimization
     nsga.set_user_idcg_values(val_user_idcg_scores)
 
-    pareto_front, history_nsga = nsga.run(generations=GENERATIONS, pop_size=POP_SIZE)
+    pareto_front, history_nsga = nsga.run(
+        generations=GENERATIONS,
+        pop_size=POP_SIZE,
+        crossover_rate=CROSSOVER_RATE,
+        mutation_rate=MUTATION_RATE,
+    )
 
     # --- Pareto Front Visualization (VALIDATION Set Metrics) ---
     # NOTE: This plot shows metrics computed against the VALIDATION set (nsga.target_matrix),

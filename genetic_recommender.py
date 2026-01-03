@@ -144,22 +144,29 @@ class GeneticRecommender:
 
     def crossover(self, parent1, parent2):
         """
-        Partially Mapped Crossover (PMX).
+        Order Crossover (OX).
         Applied individually to each user's permutation.
+        Preserves relative ordering from parents, which is better for ranking problems.
         """
         child1 = np.empty_like(parent1)
         child2 = np.empty_like(parent2)
 
         for u in range(self.num_users):
-            c1_row, c2_row = self._pmx_1d(parent1[u], parent2[u])
+            c1_row, c2_row = self._ox_1d(parent1[u], parent2[u])
             child1[u] = c1_row
             child2[u] = c2_row
 
         return child1, child2
 
-    def _pmx_1d(self, p1, p2):
+    def _ox_1d(self, p1, p2):
         """
-        Helper for PMX on a single permutation (1D array).
+        Helper for Order Crossover (OX) on a single permutation (1D array).
+
+        Algorithm:
+        1. Select two crossover points
+        2. Copy the segment between points from parent1 to child1
+        3. Fill remaining positions with genes from parent2 in order, skipping duplicates
+        4. Symmetric operation for child2
         """
         size = len(p1)
         # Select two random cut points
@@ -171,53 +178,46 @@ class GeneticRecommender:
         c1 = np.full(size, -1, dtype=p1.dtype)
         c2 = np.full(size, -1, dtype=p2.dtype)
 
-        # Copy segments
+        # Copy segments from respective parents
         c1[start:end] = p1[start:end]
         c2[start:end] = p2[start:end]
 
-        p1_seg_set = set(p1[start:end])
-        p2_seg_set = set(p2[start:end])
+        # Create sets for quick lookup of copied genes
+        c1_set = set(p1[start:end])
+        c2_set = set(p2[start:end])
 
-        # Let's map value -> index in segment P1
-        p1_seg_map = {val: idx for idx, val in enumerate(p1[start:end])}
-        # p2_seg_map = {val: idx for idx, val in enumerate(p2[start:end])} # relative index 0..len
-
-        # Fill Child 1
+        # Fill child1 with genes from parent2 (in order, starting after end)
+        # Wrap around the chromosome
+        fill_pos = end % size
         for i in range(size):
-            if start <= i < end:
-                continue
+            gene = p2[(end + i) % size]
+            if gene not in c1_set:
+                c1[fill_pos] = gene
+                fill_pos = (fill_pos + 1) % size
+                # Skip the copied segment
+                if fill_pos == start:
+                    fill_pos = end % size
 
-            candidate = p2[i]
-
-            while candidate in p1_seg_set:
-                rel_idx = p1_seg_map[candidate]
-                candidate = p2[start + rel_idx]
-
-            c1[i] = candidate
-
-        # Fill Child 2 (Symmetric)
-        p2_seg_map = {val: idx for idx, val in enumerate(p2[start:end])}
-
+        # Fill child2 with genes from parent1 (in order, starting after end)
+        fill_pos = end % size
         for i in range(size):
-            if start <= i < end:
-                continue
-
-            candidate = p1[i]
-            while candidate in p2_seg_set:
-                rel_idx = p2_seg_map[candidate]
-                candidate = p1[start + rel_idx]
-
-            c2[i] = candidate
+            gene = p1[(end + i) % size]
+            if gene not in c2_set:
+                c2[fill_pos] = gene
+                fill_pos = (fill_pos + 1) % size
+                # Skip the copied segment
+                if fill_pos == start:
+                    fill_pos = end % size
 
         return c1, c2
 
-    def mutate(self, individual, mutation_rate=0.01):
+    def insert_mutate(self, individual, mutation_rate):
         """
-        Swap Mutation.
-        For each user, with prob mutation_rate, swap two items in their list.
+        Insert/Slide Mutation.
+        For each mutated user, removes an item from one position and inserts it at another.
+        This provides finer positional adjustments compared to swap mutation,
+        which is particularly useful for ranking problems.
         """
-
-        # Optimization: Only mutate some users
         num_mutations = int(self.num_users * mutation_rate)
         if num_mutations == 0:
             return individual
@@ -225,22 +225,29 @@ class GeneticRecommender:
         users_to_mutate = np.random.choice(self.num_users, num_mutations, replace=False)
 
         for u in users_to_mutate:
-            # Select a position within top-k to swap out
-            idx1 = np.random.randint(0, self.top_k)
+            # Select source position (where to remove from)
+            idx_from = np.random.randint(0, self.candidate_len)
 
-            # Select a different position from the candidate list to swap in
-            # Ensure idx2 != idx1 to avoid no-op swaps
-            # We pick from [top_k, candidate_len) to always bring in a new item
-            if self.candidate_len > self.top_k:
-                idx2 = np.random.randint(self.top_k, self.candidate_len)
+            # Select destination position (where to insert)
+            # Ensure different from source to avoid no-op
+            idx_to = np.random.randint(0, self.candidate_len - 1)
+            if idx_to >= idx_from:
+                idx_to += 1
+
+            # Perform insert mutation: remove from idx_from, insert at idx_to
+            item = individual[u, idx_from]
+            if idx_from < idx_to:
+                # Shift elements left to fill the gap, then insert
+                individual[u, idx_from:idx_to] = individual[
+                    u, idx_from + 1 : idx_to + 1
+                ]
+                individual[u, idx_to] = item
             else:
-                # Edge case: candidate_len == top_k, pick any different index
-                idx2 = (idx1 + 1) % self.candidate_len
-
-            individual[u, idx1], individual[u, idx2] = (
-                individual[u, idx2],
-                individual[u, idx1],
-            )
+                # Shift elements right to make room, then insert
+                individual[u, idx_to + 1 : idx_from + 1] = individual[
+                    u, idx_to:idx_from
+                ]
+                individual[u, idx_to] = item
 
         return individual
 
@@ -267,7 +274,7 @@ class GeneticRecommender:
 
         return selected
 
-    def run(self, generations=10, pop_size=20, crossover_rate=0.8, mutation_rate=0.1):
+    def run(self, generations, pop_size, crossover_rate, mutation_rate):
         population = self.initialize_population(pop_size)
 
         best_overall = None
@@ -319,8 +326,8 @@ class GeneticRecommender:
                 else:
                     c1, c2 = p1.copy(), p2.copy()
 
-                c1 = self.mutate(c1, mutation_rate)
-                c2 = self.mutate(c2, mutation_rate)
+                c1 = self.insert_mutate(c1, mutation_rate)
+                c2 = self.insert_mutate(c2, mutation_rate)
 
                 next_pop.append(c1)
                 if len(next_pop) < pop_size:
@@ -495,7 +502,7 @@ class NsgaIIRecommender(GeneticRecommender):
 
         return selected
 
-    def run(self, generations=10, pop_size=20, crossover_rate=0.8, mutation_rate=0.1):
+    def run(self, generations, pop_size, crossover_rate, mutation_rate):
         print(f"Starting NSGA-II Evolution: Pop={pop_size}, Gens={generations}")
 
         population = self.initialize_population(pop_size)
@@ -530,8 +537,8 @@ class NsgaIIRecommender(GeneticRecommender):
                 else:
                     c1, c2 = p1.copy(), p2.copy()
 
-                c1 = self.mutate(c1, mutation_rate)
-                c2 = self.mutate(c2, mutation_rate)
+                c1 = self.insert_mutate(c1, mutation_rate)
+                c2 = self.insert_mutate(c2, mutation_rate)
 
                 offspring_pop.append(c1)
                 if len(offspring_pop) < pop_size:
