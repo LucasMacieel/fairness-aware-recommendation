@@ -126,25 +126,6 @@ def calculate_shannon_entropy(recs_indices, num_items):
     return entropy / max_entropy if max_entropy > 0 else 0.0
 
 
-def calculate_item_coverage(recs_indices, num_items):
-    """
-    Calculate item coverage ratio (secondary diagnostic metric).
-
-    Coverage measures what fraction of the catalog gets recommended at least once.
-    This is a complementary metric to entropy - coverage tells you breadth,
-    entropy tells you distribution uniformity.
-
-    Args:
-        recs_indices: array of shape (num_users, k) with item indices
-        num_items: total number of items in the catalog
-
-    Returns:
-        float: coverage ratio (unique recommended items / total items)
-    """
-    unique_indices = np.unique(recs_indices.flatten())
-    return len(unique_indices) / num_items if num_items > 0 else 0.0
-
-
 def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
     """
     Calculate NDCG scores for each user based on their recommendations.

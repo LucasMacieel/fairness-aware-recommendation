@@ -381,7 +381,7 @@ class NsgaIIRecommender(GeneticRecommender):
         We want to:
          - Maximize MDCG -> Minimize -MDCG
          - Minimize Activity Gap
-         - Maximize Item Coverage -> Minimize -Item Coverage
+         - Maximize Item Entropy -> Minimize -Item Entropy
         """
         pop_size = len(population_metrics)
         S = [[] for _ in range(pop_size)]
