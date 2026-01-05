@@ -3,8 +3,9 @@ import random
 import pandas as pd
 from data_processing import (
     load_movielens_1m_surprise,
-    load_movielens_100k_surprise,
     load_book_crossing,
+    load_digital_music,
+    load_video_games,
     df_to_surprise_trainset,
     split_train_val_test_stratified,
     create_aligned_matrices_3way,
@@ -109,7 +110,7 @@ def run_pipeline(
         "Dataset": dataset_name,
         "Users": train_matrix.shape[0],
         "Items": train_matrix.shape[1],
-        "Sparsity": 1 - (np.count_nonzero(train_matrix) / train_matrix.size),
+        "Density": np.count_nonzero(train_matrix) / train_matrix.size,
     }
 
     # --- Generate Candidate Lists FIRST (needed for IDCG and baseline comparison) ---
@@ -212,11 +213,17 @@ def run_pipeline(
     # Inject the validation-set IDCG values for optimization
     ga.set_user_idcg_values(val_user_idcg_scores)
 
+    # --- Generate Shared Initial Population for Fair Comparison ---
+    # Both GA and NSGA-II start from the same population to isolate algorithm differences
+    print("Generating shared initial population for GA and NSGA-II...")
+    shared_initial_population = ga.initialize_population(POP_SIZE)
+
     best_ind, history = ga.run(
         generations=GENERATIONS,
         pop_size=POP_SIZE,
         crossover_rate=CROSSOVER_RATE,
         mutation_rate=MUTATION_RATE,
+        initial_population=shared_initial_population,
     )
 
     # --- Final Evaluation of GA on Test Set ---
@@ -270,6 +277,7 @@ def run_pipeline(
         pop_size=POP_SIZE,
         crossover_rate=CROSSOVER_RATE,
         mutation_rate=MUTATION_RATE,
+        initial_population=shared_initial_population,
     )
 
     # --- Pareto Front Visualization (VALIDATION Set Metrics) ---
@@ -476,44 +484,6 @@ def main():
     all_results = []
     k_ndcg = K_NDCG  # Use module-level constant
 
-    # MovieLens 100k - Using Surprise's built-in dataset
-    try:
-        print("\n--- Loading MovieLens 100k (Surprise built-in) ---")
-        (
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            prediction_matrix,
-        ) = load_or_create_cached_data(
-            dataset_name="MovieLens 100k",
-            load_fn=load_movielens_100k_surprise,
-            rating_scale=(1, 5),
-        )
-
-        result = run_pipeline(
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            "MovieLens 100k",
-            k_ndcg,
-            prediction_matrix=prediction_matrix,
-        )
-        all_results.append(result)
-
-    except Exception as e:
-        print(f"Error processing MovieLens 100k: {e}")
-        import traceback
-
-        traceback.print_exc()
-
     # MovieLens 1M - Using Surprise's built-in dataset
     try:
         print("\n--- Loading MovieLens 1M (Surprise built-in) ---")
@@ -588,6 +558,86 @@ def main():
 
     except Exception as e:
         print(f"Error processing Book-Crossing: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+    # Amazon Video Games dataset
+    try:
+        print("\n--- Loading Amazon Video Games Dataset ---")
+        (
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            prediction_matrix,
+        ) = load_or_create_cached_data(
+            dataset_name="Video Games",
+            load_fn=load_video_games,
+            rating_scale=(1, 5),
+            min_interactions=10,  # Passed to load_video_games
+        )
+
+        result = run_pipeline(
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            "Video Games",
+            k_ndcg,
+            rating_scale=(1, 5),
+            prediction_matrix=prediction_matrix,
+        )
+        all_results.append(result)
+
+    except Exception as e:
+        print(f"Error processing Video Games: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+    # Amazon Digital Music dataset
+    try:
+        print("\n--- Loading Amazon Digital Music Dataset ---")
+        (
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            prediction_matrix,
+        ) = load_or_create_cached_data(
+            dataset_name="Digital Music",
+            load_fn=load_digital_music,
+            rating_scale=(1, 5),
+            min_interactions=6,  # Passed to load_digital_music
+        )
+
+        result = run_pipeline(
+            train_matrix,
+            val_matrix,
+            test_matrix,
+            user_ids,
+            item_ids,
+            activity_map,
+            train_df,
+            "Digital Music",
+            k_ndcg,
+            rating_scale=(1, 5),
+            prediction_matrix=prediction_matrix,
+        )
+        all_results.append(result)
+
+    except Exception as e:
+        print(f"Error processing Digital Music: {e}")
         import traceback
 
         traceback.print_exc()

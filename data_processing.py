@@ -27,31 +27,7 @@ def load_movielens_1m_surprise():
     return data, df
 
 
-def load_movielens_100k_surprise():
-    """
-    Load MovieLens 100k dataset using Surprise's built-in loader.
-
-    Returns:
-        surprise.Dataset: Surprise dataset object with ML-100k data
-        pd.DataFrame: Full dataset as DataFrame for compatibility with activity_map
-    """
-    # Load the built-in ML-100k dataset
-    data = Dataset.load_builtin("ml-100k")
-
-    # Also get it as a DataFrame for downstream processing
-    df = pd.DataFrame(
-        data.raw_ratings, columns=["user_id", "item_id", "rating", "timestamp"]
-    )
-
-    # Convert types to match existing pipeline expectations
-    df["user_id"] = df["user_id"].astype(str)
-    df["item_id"] = df["item_id"].astype(str)
-    df["rating"] = df["rating"].astype(float)
-
-    return data, df
-
-
-def load_book_crossing(filepath="data/Ratings.csv", min_interactions=5):
+def load_book_crossing(filepath="data/book_crossing.csv", min_interactions=5):
     """
     Load Book-Crossing dataset from local CSV file with k-core filtering.
 
@@ -59,7 +35,7 @@ def load_book_crossing(filepath="data/Ratings.csv", min_interactions=5):
     User-ID, ISBN, Rating (0-10 scale, 0 = implicit rating)
 
     Args:
-        filepath: Path to the Ratings.csv file
+        filepath: Path to the book_crossing.csv file
         min_interactions: Minimum interactions per user AND item (k-core filtering)
 
     Returns:
@@ -71,8 +47,8 @@ def load_book_crossing(filepath="data/Ratings.csv", min_interactions=5):
     if not os.path.exists(filepath):
         # Try relative paths
         alt_paths = [
-            os.path.join("data", "Ratings.csv"),
-            os.path.join("..", "data", "Ratings.csv"),
+            os.path.join("data", "book_crossing.csv"),
+            os.path.join("..", "data", "book_crossing.csv"),
         ]
         for alt in alt_paths:
             if os.path.exists(alt):
@@ -122,6 +98,158 @@ def load_book_crossing(filepath="data/Ratings.csv", min_interactions=5):
 
     print(
         f"Book-Crossing: After {min_interactions}-core filtering: "
+        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
+    )
+
+    return df
+
+
+def load_digital_music(filepath="data/digital_music.csv", min_interactions=5):
+    """
+    Load Amazon Digital Music dataset from local CSV file with k-core filtering.
+
+    The Digital Music dataset has columns:
+    user_id, item_id, rating (1-5 scale)
+
+    Args:
+        filepath: Path to the digital_music.csv file
+        min_interactions: Minimum interactions per user AND item (k-core filtering)
+
+    Returns:
+        pd.DataFrame: DataFrame with user_id, item_id, rating columns
+    """
+    import os
+
+    # Find the file
+    if not os.path.exists(filepath):
+        # Try relative paths
+        alt_paths = [
+            os.path.join("data", "digital_music.csv"),
+            os.path.join("..", "data", "digital_music.csv"),
+        ]
+        for alt in alt_paths:
+            if os.path.exists(alt):
+                filepath = alt
+                break
+        else:
+            raise FileNotFoundError(f"Digital Music dataset not found at {filepath}")
+
+    # Load the CSV
+    df = pd.read_csv(filepath)
+
+    # Convert types
+    df["user_id"] = df["user_id"].astype(str)
+    df["item_id"] = df["item_id"].astype(str)
+    df["rating"] = df["rating"].astype(float)
+
+    print(f"Digital Music: {len(df)} total ratings loaded")
+
+    # Handle duplicate (user_id, item_id) pairs by taking mean rating
+    # This prevents pivot errors downstream when creating user-item matrices
+    duplicates = df.duplicated(subset=["user_id", "item_id"], keep=False).sum()
+    if duplicates > 0:
+        print(
+            f"Digital Music: Found {duplicates} duplicate entries, aggregating with mean..."
+        )
+        df = df.groupby(["user_id", "item_id"], as_index=False)["rating"].mean()
+        print(f"Digital Music: After deduplication: {len(df)} unique ratings")
+
+    # Apply k-core filtering iteratively until convergence
+    # Keep only users and items with at least min_interactions
+    prev_len = 0
+    iteration = 0
+    while len(df) != prev_len:
+        prev_len = len(df)
+        iteration += 1
+
+        # Filter users with at least min_interactions
+        user_counts = df["user_id"].value_counts()
+        valid_users = user_counts[user_counts >= min_interactions].index
+        df = df[df["user_id"].isin(valid_users)]
+
+        # Filter items with at least min_interactions
+        item_counts = df["item_id"].value_counts()
+        valid_items = item_counts[item_counts >= min_interactions].index
+        df = df[df["item_id"].isin(valid_items)]
+
+    print(
+        f"Digital Music: After {min_interactions}-core filtering: "
+        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
+    )
+
+    return df
+
+
+def load_video_games(filepath="data/video_games.csv", min_interactions=5):
+    """
+    Load Amazon Video Games 5-core dataset from local CSV file with k-core filtering.
+
+    The Video Games dataset has columns:
+    user_id, item_id, rating (1-5 scale)
+
+    Args:
+        filepath: Path to the video_games.csv file
+        min_interactions: Minimum interactions per user AND item (k-core filtering)
+
+    Returns:
+        pd.DataFrame: DataFrame with user_id, item_id, rating columns
+    """
+    import os
+
+    # Find the file
+    if not os.path.exists(filepath):
+        # Try relative paths
+        alt_paths = [
+            os.path.join("data", "video_games.csv"),
+            os.path.join("..", "data", "video_games.csv"),
+        ]
+        for alt in alt_paths:
+            if os.path.exists(alt):
+                filepath = alt
+                break
+        else:
+            raise FileNotFoundError(f"Video Games dataset not found at {filepath}")
+
+    # Load the CSV
+    df = pd.read_csv(filepath)
+
+    # Convert types
+    df["user_id"] = df["user_id"].astype(str)
+    df["item_id"] = df["item_id"].astype(str)
+    df["rating"] = df["rating"].astype(float)
+
+    print(f"Video Games: {len(df)} total ratings loaded")
+
+    # Handle duplicate (user_id, item_id) pairs by taking mean rating
+    # This prevents pivot errors downstream when creating user-item matrices
+    duplicates = df.duplicated(subset=["user_id", "item_id"], keep=False).sum()
+    if duplicates > 0:
+        print(
+            f"Video Games: Found {duplicates} duplicate entries, aggregating with mean..."
+        )
+        df = df.groupby(["user_id", "item_id"], as_index=False)["rating"].mean()
+        print(f"Video Games: After deduplication: {len(df)} unique ratings")
+
+    # Apply k-core filtering iteratively until convergence
+    # Keep only users and items with at least min_interactions
+    prev_len = 0
+    iteration = 0
+    while len(df) != prev_len:
+        prev_len = len(df)
+        iteration += 1
+
+        # Filter users with at least min_interactions
+        user_counts = df["user_id"].value_counts()
+        valid_users = user_counts[user_counts >= min_interactions].index
+        df = df[df["user_id"].isin(valid_users)]
+
+        # Filter items with at least min_interactions
+        item_counts = df["item_id"].value_counts()
+        valid_items = item_counts[item_counts >= min_interactions].index
+        df = df[df["item_id"].isin(valid_items)]
+
+    print(
+        f"Video Games: After {min_interactions}-core filtering: "
         f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
     )
 

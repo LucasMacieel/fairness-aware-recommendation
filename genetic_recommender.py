@@ -274,8 +274,20 @@ class GeneticRecommender:
 
         return selected
 
-    def run(self, generations, pop_size, crossover_rate, mutation_rate):
-        population = self.initialize_population(pop_size)
+    def run(
+        self,
+        generations,
+        pop_size,
+        crossover_rate,
+        mutation_rate,
+        initial_population=None,
+    ):
+        # Use provided initial population if available, otherwise generate new one
+        if initial_population is not None:
+            # Deep copy to avoid modifying the shared population
+            population = [ind.copy() for ind in initial_population]
+        else:
+            population = self.initialize_population(pop_size)
 
         best_overall = None
         best_score = -np.inf
@@ -502,13 +514,34 @@ class NsgaIIRecommender(GeneticRecommender):
 
         return selected
 
-    def run(self, generations, pop_size, crossover_rate, mutation_rate):
+    def run(
+        self,
+        generations,
+        pop_size,
+        crossover_rate,
+        mutation_rate,
+        initial_population=None,
+    ):
         print(f"Starting NSGA-II Evolution: Pop={pop_size}, Gens={generations}")
 
-        population = self.initialize_population(pop_size)
+        # Use provided initial population if available, otherwise generate new one
+        if initial_population is not None:
+            # Deep copy to avoid modifying the shared population
+            population = [ind.copy() for ind in initial_population]
+        else:
+            population = self.initialize_population(pop_size)
 
         # Initial Evaluate
         fitness_results = [self.fitness(ind) for ind in population]
+
+        # Log initial population metrics (before any evolution, for fair comparison with GA)
+        scores = [f[0] for f in fitness_results]
+        best_idx = np.argmax(scores)
+        initial_best = fitness_results[best_idx]
+        print(
+            f"Gen 0 (NSGA-II): Best Weighted Score={initial_best[0]:.4f}, MDCG={initial_best[1]:.4f}, "
+            f"Gap={initial_best[2]:.4f}, Entropy={initial_best[3]:.4f}"
+        )
 
         # Initial Sort
         fronts, ranks = self.fast_non_dominated_sort(fitness_results)
@@ -601,7 +634,7 @@ class NsgaIIRecommender(GeneticRecommender):
             history.append(current_best_metrics)
 
             print(
-                f"Gen {gen} (NSGA-II): Best Weighted Score={current_best_metrics[0]:.4f}, MDCG={current_best_metrics[1]:.4f}, Gap={current_best_metrics[2]:.4f}, Entropy={current_best_metrics[3]:.4f}"
+                f"Gen {gen + 1} (NSGA-II): Best Weighted Score={current_best_metrics[0]:.4f}, MDCG={current_best_metrics[1]:.4f}, Gap={current_best_metrics[2]:.4f}, Entropy={current_best_metrics[3]:.4f}"
             )
 
         # Return the Pareto Front (Rank 0)
