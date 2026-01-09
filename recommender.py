@@ -1,14 +1,17 @@
+from typing import Any
+
 import numpy as np
+from numpy.typing import NDArray
 from surprise import SVD
+from surprise import Trainset
 
 
-def train_svd_surprise(trainset, random_state=42):
+def train_svd_surprise(trainset: Trainset, random_state: int = 42) -> SVD:
     """
     Train an SVD model using scikit-surprise.
 
     Args:
         trainset: A Surprise Trainset object (from build_full_trainset or train_test_split)
-        n_factors (int): Number of latent factors for SVD
         random_state (int): Random seed for reproducibility
 
     Returns:
@@ -19,7 +22,12 @@ def train_svd_surprise(trainset, random_state=42):
     return algo
 
 
-def get_predictions_matrix(algo, user_ids, item_ids, trainset):
+def get_predictions_matrix(
+    algo: SVD,
+    user_ids: list[Any],
+    item_ids: list[Any],
+    trainset: Trainset,
+) -> NDArray[np.floating]:
     """
     Generate a full prediction matrix for all user-item pairs.
 

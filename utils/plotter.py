@@ -1,9 +1,14 @@
-import matplotlib.pyplot as plt
-import os
 import itertools
+import os
+
+import matplotlib.pyplot as plt
 
 
-def plot_pairwise_pareto(solutions, dataset_name, output_dir="plots"):
+def plot_pairwise_pareto(
+    solutions: list[tuple[float, float, float]],
+    dataset_name: str,
+    output_dir: str = "plots",
+) -> None:
     """
     Plots pairwise comparisons of objectives for the NSGA-II Pareto front.
 
@@ -42,7 +47,7 @@ def plot_pairwise_pareto(solutions, dataset_name, output_dir="plots"):
         ax.set_title(f"{x_name} vs {y_name}")
         ax.grid(True, linestyle="--", alpha=0.7)
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout(rect=(0, 0.03, 1, 0.95))
 
     filename = f"{dataset_name.replace(' ', '_').lower()}_pareto_pairwise.png"
     filepath = os.path.join(output_dir, filename)

@@ -1,17 +1,32 @@
-import numpy as np
+from __future__ import annotations
+
 import random
 import traceback
+from typing import Any, Callable
+
+import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
+
+from cache import (
+    all_matrices_cached,
+    get_all_matrix_cache_paths,
+    load_matrix,
+    load_metadata,
+    save_matrix,
+    save_metadata,
+)
 from data_processing import (
-    load_movielens_1m_surprise,
+    create_aligned_matrices_3way,
+    df_to_surprise_trainset,
+    get_activity_group_map,
     load_book_crossing,
     load_digital_music,
+    load_movielens_1m_surprise,
     load_video_games,
-    df_to_surprise_trainset,
     split_train_val_test_stratified,
-    create_aligned_matrices_3way,
-    get_activity_group_map,
 )
+from genetic_recommender import GeneticRecommender, NsgaIIRecommender
 from metrics import (
     DEFAULT_WEIGHTS,
     calculate_activity_gap,
@@ -20,17 +35,8 @@ from metrics import (
     compute_weighted_score,
     get_user_ideal_dcg_from_candidates,
 )
-from recommender import train_svd_surprise, get_predictions_matrix
-from genetic_recommender import GeneticRecommender, NsgaIIRecommender
+from recommender import get_predictions_matrix, train_svd_surprise
 from utils.plotter import plot_pairwise_pareto
-from cache import (
-    get_all_matrix_cache_paths,
-    all_matrices_cached,
-    save_matrix,
-    load_matrix,
-    save_metadata,
-    load_metadata,
-)
 
 # --- Module-Level Constants ---
 # Centralized for consistency across the pipeline
@@ -71,18 +77,18 @@ DATASET_CONFIGS = [
 
 
 def run_pipeline(
-    train_matrix,
-    val_matrix,
-    test_matrix,
-    user_ids,
-    item_ids,
-    activity_map,
-    train_df,
-    dataset_name,
-    k_ndcg=K_NDCG,
-    rating_scale=(1, 5),
-    prediction_matrix=None,
-):
+    train_matrix: NDArray[np.floating],
+    val_matrix: NDArray[np.floating],
+    test_matrix: NDArray[np.floating],
+    user_ids: list[Any],
+    item_ids: list[Any],
+    activity_map: dict[Any, str],
+    train_df: pd.DataFrame | None,
+    dataset_name: str,
+    k_ndcg: int = K_NDCG,
+    rating_scale: tuple[int, int] = (1, 5),
+    prediction_matrix: NDArray[np.floating] | None = None,
+) -> dict[str, Any]:
     """
     Run the recommendation pipeline with train/validation/test split.
 
@@ -115,6 +121,9 @@ def run_pipeline(
     # Use pre-computed prediction matrix if provided (from cache)
     if prediction_matrix is None:
         # Note: perform_svd internally caps k to min(matrix.shape) - 1 if needed
+        assert train_df is not None, (
+            "train_df required when prediction_matrix not provided"
+        )
         trainset = df_to_surprise_trainset(train_df, rating_scale=rating_scale)
         svd_model = train_svd_surprise(trainset, random_state=SEED)
         print("SVD Training Complete.")
@@ -138,6 +147,7 @@ def run_pipeline(
         "Dataset": dataset_name,
         "Users": train_matrix.shape[0],
         "Items": train_matrix.shape[1],
+        "Interactions": np.count_nonzero(train_matrix),
         "Density": np.count_nonzero(train_matrix) / train_matrix.size,
     }
 
@@ -257,6 +267,7 @@ def run_pipeline(
     # --- Final Evaluation of GA on Test Set ---
     # We take the best individual (list of indices) and evaluate against Test Matrix.
     # Using TEST set IDCG for final evaluation (different from optimization IDCG).
+    assert best_ind is not None, "GA failed to produce a best individual"
     ga_recs_indices = ga.decode(best_ind)
     ga_test_ndcg_scores = calculate_user_ndcg_scores(
         ga_recs_indices, test_matrix, test_user_idcg_scores
@@ -337,7 +348,7 @@ def run_pipeline(
         test_ndcg_scores = calculate_user_ndcg_scores(
             recs_indices, test_matrix, test_user_idcg_scores
         )
-        test_mdcg = np.mean(test_ndcg_scores)
+        test_mdcg = float(np.mean(test_ndcg_scores))
 
         # Calculate activity gap on test
         if activity_map:
@@ -403,11 +414,20 @@ def run_pipeline(
 
 def load_or_create_cached_data(
     dataset_name: str,
-    load_fn,
-    rating_scale=(1, 5),
+    load_fn: Callable[..., pd.DataFrame | tuple[Any, pd.DataFrame]],
+    rating_scale: tuple[int, int] = (1, 5),
     use_cache: bool = True,
-    **load_kwargs,
-):
+    **load_kwargs: Any,
+) -> tuple[
+    NDArray[np.floating],
+    NDArray[np.floating],
+    NDArray[np.floating],
+    list[Any],
+    list[Any],
+    dict[Any, str],
+    pd.DataFrame | None,
+    NDArray[np.floating],
+]:
     """
     Load dataset with caching support for matrices and predictions.
 
@@ -436,7 +456,10 @@ def load_or_create_cached_data(
         test_matrix = load_matrix(cache_paths["test"])
         prediction_matrix = load_matrix(cache_paths["prediction"])
 
-        user_ids, item_ids, activity_map = load_metadata(dataset_name)
+        metadata = load_metadata(dataset_name)
+        assert metadata is not None, f"Metadata not found for {dataset_name}"
+        user_ids, item_ids, activity_map = metadata
+        assert activity_map is not None, f"Activity map not found for {dataset_name}"
 
         return (
             train_matrix,
@@ -501,7 +524,7 @@ def load_or_create_cached_data(
     )
 
 
-def main():
+def main() -> None:
     # Set random seed FIRST before any data loading for full reproducibility.
     np.random.seed(SEED)
     random.seed(SEED)

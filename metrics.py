@@ -1,12 +1,19 @@
+from typing import Any
+
 import numpy as np
+from numpy.typing import ArrayLike, NDArray
 import warnings
 
 # --- Module-Level Constants ---
 # Single source of truth for default weights used by GA/NSGA-II
-DEFAULT_WEIGHTS = {"mdcg": 1.0, "activity_gap": 1.0, "item_entropy": 1.0}
+DEFAULT_WEIGHTS: dict[str, float] = {
+    "mdcg": 1.0,
+    "activity_gap": 1.0,
+    "item_entropy": 1.0,
+}
 
 
-def dcg_at_k(r, k):
+def dcg_at_k(r: ArrayLike, k: int) -> float:
     """
     Score is discounted cumulative gain (DCG) at rank k
     r: Relevance scores (list or numpy array) in rank order
@@ -14,7 +21,7 @@ def dcg_at_k(r, k):
     """
     r = np.asarray(r)[:k]
     if r.size:
-        return np.sum(r / np.log2(np.arange(2, r.size + 2)))
+        return float(np.sum(r / np.log2(np.arange(2, r.size + 2))))
     return 0.0
 
 
@@ -23,7 +30,12 @@ def dcg_at_k(r, k):
 # ensuring consistent normalization between baseline and GA/NSGA-II evaluations.
 
 
-def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=True):
+def calculate_activity_gap(
+    ndcg_scores: list[float] | NDArray[np.floating],
+    activity_map: dict[Any, str],
+    user_ids: list[Any] | None = None,
+    verbose: bool = True,
+) -> float:
     """
     Calculates the Activity Gap between Active and Inactive users using NDCG.
     Gap = |Avg(NDCG_active) - Avg(NDCG_inactive)|
@@ -85,10 +97,12 @@ def calculate_activity_gap(ndcg_scores, activity_map, user_ids=None, verbose=Tru
             f"Inactive Avg: {avg_inactive:.4f} (n={len(inactive_scores)})"
         )
 
-    return abs(avg_active - avg_inactive)
+    return float(abs(avg_active - avg_inactive))
 
 
-def calculate_shannon_entropy(recs_indices, num_items):
+def calculate_shannon_entropy(
+    recs_indices: NDArray[np.integer], num_items: int
+) -> float:
     """
     Calculate normalized Shannon entropy of item recommendations.
 
@@ -123,10 +137,14 @@ def calculate_shannon_entropy(recs_indices, num_items):
     # Normalize by maximum possible entropy (uniform over entire catalog)
     max_entropy = np.log2(num_items)
 
-    return entropy / max_entropy if max_entropy > 0 else 0.0
+    return float(entropy / max_entropy) if max_entropy > 0 else 0.0
 
 
-def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
+def calculate_user_ndcg_scores(
+    recs_indices: NDArray[np.integer],
+    ground_truth_matrix: NDArray[np.floating],
+    idcg_values: NDArray[np.floating] | list[float],
+) -> list[float]:
     """
     Calculate NDCG scores for each user based on their recommendations.
 
@@ -165,7 +183,11 @@ def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
     return ndcg_scores.tolist()
 
 
-def get_user_ideal_dcg_from_candidates(ground_truth_matrix, candidate_lists, top_k):
+def get_user_ideal_dcg_from_candidates(
+    ground_truth_matrix: NDArray[np.floating],
+    candidate_lists: NDArray[np.integer],
+    top_k: int,
+) -> NDArray[np.floating]:
     """
     Calculates the Ideal DCG (IDCG) for each user based ONLY on items in their candidate pool.
 
@@ -201,7 +223,12 @@ def get_user_ideal_dcg_from_candidates(ground_truth_matrix, candidate_lists, top
     return np.array(idcg_scores)
 
 
-def compute_weighted_score(mdcg, activity_gap, item_entropy, weights):
+def compute_weighted_score(
+    mdcg: float,
+    activity_gap: float,
+    item_entropy: float,
+    weights: dict[str, float],
+) -> float:
     """
     Compute the combined weighted fitness score.
 

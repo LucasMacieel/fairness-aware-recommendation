@@ -1,12 +1,15 @@
 import json
-import numpy as np
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
 
 # Default cache directory in project root
-DEFAULT_CACHE_DIR = Path(__file__).parent / "cache"
+DEFAULT_CACHE_DIR: Path = Path(__file__).parent / "cache"
 
 
-def get_cache_dir():
+def get_cache_dir() -> Path:
     """Get the cache directory path, creating it if it doesn't exist."""
     cache_dir = DEFAULT_CACHE_DIR
     cache_dir.mkdir(exist_ok=True)
@@ -34,7 +37,7 @@ def get_cache_path(dataset_name: str, matrix_type: str) -> Path:
     return get_cache_dir() / filename
 
 
-def save_matrix(matrix: np.ndarray, cache_path: Path) -> None:
+def save_matrix(matrix: NDArray[np.floating], cache_path: Path) -> None:
     """
     Save numpy array to disk.
 
@@ -46,7 +49,7 @@ def save_matrix(matrix: np.ndarray, cache_path: Path) -> None:
     print(f"  -> Cached: {cache_path.name}")
 
 
-def load_matrix(cache_path: Path) -> np.ndarray:
+def load_matrix(cache_path: Path) -> NDArray[np.floating]:
     """
     Load numpy array from disk.
 
@@ -67,7 +70,10 @@ def cache_exists(cache_path: Path) -> bool:
 
 
 def save_metadata(
-    dataset_name: str, user_ids: list, item_ids: list, activity_map: dict = None
+    dataset_name: str,
+    user_ids: list[Any],
+    item_ids: list[Any],
+    activity_map: dict[Any, str] | None = None,
 ) -> None:
     """
     Save metadata (user_ids, item_ids, activity_map) to JSON file.
@@ -93,7 +99,9 @@ def save_metadata(
     print(f"  -> Cached: {metadata_path.name}")
 
 
-def load_metadata(dataset_name: str) -> tuple:
+def load_metadata(
+    dataset_name: str,
+) -> tuple[list[Any], list[Any], dict[Any, str] | None] | None:
     """
     Load metadata (user_ids, item_ids, activity_map) from JSON file.
 
@@ -117,7 +125,7 @@ def load_metadata(dataset_name: str) -> tuple:
     return metadata["user_ids"], metadata["item_ids"], metadata.get("activity_map")
 
 
-def get_all_matrix_cache_paths(dataset_name: str) -> dict:
+def get_all_matrix_cache_paths(dataset_name: str) -> dict[str, Path]:
     """
     Get paths for all matrix cache files for a dataset.
 

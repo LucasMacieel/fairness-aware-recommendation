@@ -1,5 +1,11 @@
-import numpy as np
+from __future__ import annotations
+
 import copy
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
+
 from metrics import (
     DEFAULT_WEIGHTS,
     calculate_activity_gap,
@@ -7,20 +13,25 @@ from metrics import (
     compute_weighted_score,
 )
 
+# Type aliases for readability
+Individual = NDArray[np.integer]  # Shape: (num_users, candidate_len)
+Population = list[Individual]
+FitnessResult = tuple[float, float, float, float]  # (score, mdcg, gap, entropy)
+
 
 class GeneticRecommender:
     def __init__(
         self,
-        num_users,
-        num_items,
-        candidate_lists,
-        target_matrix,
-        activity_map,
-        item_ids,
-        user_ids=None,
-        weights=None,
-        top_k=10,
-    ):
+        num_users: int,
+        num_items: int,
+        candidate_lists: Individual,
+        target_matrix: NDArray[np.floating],
+        activity_map: dict[Any, str],
+        item_ids: list[Any],
+        user_ids: list[Any] | None = None,
+        weights: dict[str, float] | None = None,
+        top_k: int = 10,
+    ) -> None:
         """
         candidate_lists: np.array of shape (num_users, M), where M > k.
                          Contains item INDICES (not IDs) sorted by predicted score.
@@ -52,10 +63,10 @@ class GeneticRecommender:
         self.candidate_len = candidate_lists.shape[1]
         self.user_idcg_values = None
 
-    def set_user_idcg_values(self, idcg_values):
+    def set_user_idcg_values(self, idcg_values: NDArray[np.floating]) -> None:
         self.user_idcg_values = idcg_values
 
-    def initialize_population(self, pop_size):
+    def initialize_population(self, pop_size: int) -> Population:
         """
         Individual representation: np.array of shape (num_users, candidate_len).
         Each row is a permutation of the candidate items for that user.
@@ -75,14 +86,14 @@ class GeneticRecommender:
 
         return population
 
-    def decode(self, individual):
+    def decode(self, individual: Individual) -> NDArray[np.integer]:
         """
         Extracts the Top-K items for each user from the individual.
         Returns: matrix of shape (num_users, top_k) containing item indices.
         """
         return individual[:, : self.top_k]
 
-    def fitness(self, individual):
+    def fitness(self, individual: Individual) -> FitnessResult:
         """
         Calculates fitness based on objective functions.
 
@@ -125,7 +136,7 @@ class GeneticRecommender:
             dcg_values, idcg, out=np.zeros_like(dcg_values), where=idcg > 0
         )
 
-        mean_mdcg = np.mean(ndcg_scores)
+        mean_mdcg = float(np.mean(ndcg_scores))
 
         # 2. Activity Gap - using centralized function with user_ids for consistency with main.py
         activity_gap = calculate_activity_gap(
@@ -142,7 +153,9 @@ class GeneticRecommender:
 
         return score, mean_mdcg, activity_gap, item_entropy
 
-    def crossover(self, parent1, parent2):
+    def crossover(
+        self, parent1: Individual, parent2: Individual
+    ) -> tuple[Individual, Individual]:
         """
         Order Crossover (OX).
         Applied individually to each user's permutation.
@@ -158,7 +171,9 @@ class GeneticRecommender:
 
         return child1, child2
 
-    def _ox_1d(self, p1, p2):
+    def _ox_1d(
+        self, p1: NDArray[np.integer], p2: NDArray[np.integer]
+    ) -> tuple[NDArray[np.integer], NDArray[np.integer]]:
         """
         Helper for Order Crossover (OX) on a single permutation (1D array).
 
@@ -211,7 +226,7 @@ class GeneticRecommender:
 
         return c1, c2
 
-    def insert_mutate(self, individual, mutation_rate):
+    def insert_mutate(self, individual: Individual, mutation_rate: float) -> Individual:
         """
         Insert/Slide Mutation.
         For each mutated user, removes an item from one position and inserts it at another.
@@ -251,7 +266,9 @@ class GeneticRecommender:
 
         return individual
 
-    def select(self, population, fitnesses):
+    def select(
+        self, population: Population, fitnesses: list[FitnessResult]
+    ) -> Population:
         """
         Tournament Selection
         """
@@ -274,7 +291,13 @@ class GeneticRecommender:
 
         return selected
 
-    def _create_offspring(self, parents, pop_size, crossover_rate, mutation_rate):
+    def _create_offspring(
+        self,
+        parents: Population,
+        pop_size: int,
+        crossover_rate: float,
+        mutation_rate: float,
+    ) -> Population:
         """
         Create offspring population via crossover and mutation.
 
@@ -302,12 +325,12 @@ class GeneticRecommender:
 
     def run(
         self,
-        generations,
-        pop_size,
-        crossover_rate,
-        mutation_rate,
-        initial_population=None,
-    ):
+        generations: int,
+        pop_size: int,
+        crossover_rate: float,
+        mutation_rate: float,
+        initial_population: Population | None = None,
+    ) -> tuple[Individual | None, list[FitnessResult]]:
         # Use provided initial population if available, otherwise generate new one
         if initial_population is not None:
             # Deep copy to avoid modifying the shared population
@@ -373,7 +396,9 @@ class NsgaIIRecommender(GeneticRecommender):
 
     # Inherits __init__ from GeneticRecommender - no override needed
 
-    def fast_non_dominated_sort(self, population_metrics):
+    def fast_non_dominated_sort(
+        self, population_metrics: list[FitnessResult]
+    ) -> tuple[list[list[int]], list[int]]:
         """
         Sorts the population into fronts.
         population_metrics: list of tuples (score, mdcg, activity_gap, item_entropy)
@@ -438,7 +463,9 @@ class NsgaIIRecommender(GeneticRecommender):
 
         return fronts, rank
 
-    def calculate_crowding_distance(self, front, population_metrics):
+    def calculate_crowding_distance(
+        self, front: list[int], population_metrics: list[FitnessResult]
+    ) -> dict[int, float]:
         """
         Calculates crowding distance for individuals in a front.
         """
@@ -473,7 +500,12 @@ class NsgaIIRecommender(GeneticRecommender):
 
         return distances
 
-    def nsga_selection(self, population, ranks, crowding_dists):
+    def nsga_selection(
+        self,
+        population: Population,
+        ranks: list[int],
+        crowding_dists: dict[int, float],
+    ) -> Population:
         """
         Binary Tournament Selection based on Rank and Crowding Distance
         """
@@ -503,12 +535,12 @@ class NsgaIIRecommender(GeneticRecommender):
 
     def run(
         self,
-        generations,
-        pop_size,
-        crossover_rate,
-        mutation_rate,
-        initial_population=None,
-    ):
+        generations: int,
+        pop_size: int,
+        crossover_rate: float,
+        mutation_rate: float,
+        initial_population: Population | None = None,
+    ) -> tuple[Population, list[FitnessResult]]:
         print(f"Starting NSGA-II Evolution: Pop={pop_size}, Gens={generations}")
 
         # Use provided initial population if available, otherwise generate new one

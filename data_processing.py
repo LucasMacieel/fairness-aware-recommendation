@@ -1,12 +1,21 @@
+from __future__ import annotations
+
 import os
+from typing import Any, TYPE_CHECKING
+
+import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
 from surprise import Dataset, Reader
+
+if TYPE_CHECKING:
+    from surprise import Trainset
 
 
 # --- Helper Functions for Dataset Loading ---
 
 
-def _find_file(filepath, alt_paths, dataset_name):
+def _find_file(filepath: str, alt_paths: list[str], dataset_name: str) -> str:
     """Find dataset file, trying alternate paths if primary not found."""
     if os.path.exists(filepath):
         return filepath
@@ -16,7 +25,9 @@ def _find_file(filepath, alt_paths, dataset_name):
     raise FileNotFoundError(f"{dataset_name} dataset not found at {filepath}")
 
 
-def _apply_kcore_filter(df, min_interactions, dataset_name):
+def _apply_kcore_filter(
+    df: pd.DataFrame, min_interactions: int, dataset_name: str
+) -> pd.DataFrame:
     """Apply iterative k-core filtering until convergence."""
     prev_len = 0
     while len(df) != prev_len:
@@ -36,7 +47,7 @@ def _apply_kcore_filter(df, min_interactions, dataset_name):
     return df
 
 
-def _deduplicate_ratings(df, dataset_name):
+def _deduplicate_ratings(df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
     """Handle duplicate (user_id, item_id) pairs by taking mean rating."""
     duplicates = df.duplicated(subset=["user_id", "item_id"], keep=False).sum()
     if duplicates > 0:
@@ -48,7 +59,7 @@ def _deduplicate_ratings(df, dataset_name):
     return df
 
 
-def _standardize_columns(df):
+def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Convert user_id, item_id to string and rating to float."""
     df["user_id"] = df["user_id"].astype(str)
     df["item_id"] = df["item_id"].astype(str)
@@ -56,7 +67,7 @@ def _standardize_columns(df):
     return df
 
 
-def load_movielens_1m_surprise():
+def load_movielens_1m_surprise() -> tuple[Dataset, pd.DataFrame]:
     """
     Load MovieLens 1M dataset using Surprise's built-in loader.
 
@@ -81,7 +92,9 @@ def load_movielens_1m_surprise():
     return data, df
 
 
-def load_book_crossing(filepath="data/book_crossing.csv", min_interactions=5):
+def load_book_crossing(
+    filepath: str = "data/book_crossing.csv", min_interactions: int = 5
+) -> pd.DataFrame:
     """
     Load Book-Crossing dataset from local CSV file with k-core filtering.
 
@@ -115,7 +128,9 @@ def load_book_crossing(filepath="data/book_crossing.csv", min_interactions=5):
     return _apply_kcore_filter(df, min_interactions, "Book-Crossing")
 
 
-def load_digital_music(filepath="data/digital_music.csv", min_interactions=5):
+def load_digital_music(
+    filepath: str = "data/digital_music.csv", min_interactions: int = 5
+) -> pd.DataFrame:
     """
     Load Amazon Digital Music dataset from local CSV file with k-core filtering.
 
@@ -140,7 +155,9 @@ def load_digital_music(filepath="data/digital_music.csv", min_interactions=5):
     return _apply_kcore_filter(df, min_interactions, "Digital Music")
 
 
-def load_video_games(filepath="data/video_games.csv", min_interactions=5):
+def load_video_games(
+    filepath: str = "data/video_games.csv", min_interactions: int = 5
+) -> pd.DataFrame:
     """
     Load Amazon Video Games dataset from local CSV file with k-core filtering.
 
@@ -165,7 +182,9 @@ def load_video_games(filepath="data/video_games.csv", min_interactions=5):
     return _apply_kcore_filter(df, min_interactions, "Video Games")
 
 
-def df_to_surprise_trainset(df, rating_scale=(1, 5)):
+def df_to_surprise_trainset(
+    df: pd.DataFrame, rating_scale: tuple[int, int] = (1, 5)
+) -> Trainset:
     """
     Convert a pandas DataFrame to a Surprise Trainset.
 
@@ -181,7 +200,12 @@ def df_to_surprise_trainset(df, rating_scale=(1, 5)):
     return data.build_full_trainset()
 
 
-def split_train_val_test_stratified(df, val_ratio=0.2, test_ratio=0.2, seed=42):
+def split_train_val_test_stratified(
+    df: pd.DataFrame,
+    val_ratio: float = 0.2,
+    test_ratio: float = 0.2,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Splits the dataframe into train, validation, and test sets, stratified by user.
 
@@ -238,7 +262,15 @@ def split_train_val_test_stratified(df, val_ratio=0.2, test_ratio=0.2, seed=42):
     return train_df, val_df, test_df
 
 
-def create_aligned_matrices_3way(train_df, val_df, test_df):
+def create_aligned_matrices_3way(
+    train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame
+) -> tuple[
+    NDArray[np.floating],
+    NDArray[np.floating],
+    NDArray[np.floating],
+    list[Any],
+    list[Any],
+]:
     """
     Creates aligned user-item matrices for train, validation, and test sets.
     Ensures all three matrices have the same shapes (Users x Items),
@@ -292,7 +324,9 @@ def create_aligned_matrices_3way(train_df, val_df, test_df):
     )
 
 
-def get_activity_group_map(train_df, user_ids, top_percentile=0.05):
+def get_activity_group_map(
+    train_df: pd.DataFrame, user_ids: list[Any], top_percentile: float = 0.05
+) -> dict[Any, str]:
     """
     Categorizes users into 'active' (top 5%) or 'inactive' (bottom 95%)
     based on their total interaction count in the training data.
@@ -326,7 +360,7 @@ def get_activity_group_map(train_df, user_ids, top_percentile=0.05):
     return activity_map
 
 
-def main():
+def main() -> None:
     """Test the Surprise-based ML-1M data loading."""
     print("Testing ML-1M Data Loading (Surprise)...")
     try:
