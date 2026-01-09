@@ -120,8 +120,8 @@ def calculate_shannon_entropy(recs_indices, num_items):
     # Shannon entropy: H = -sum(p * log2(p))
     entropy = -np.sum(probabilities * np.log2(probabilities))
 
-    # Normalize by maximum possible entropy (uniform over all recommended items)
-    max_entropy = np.log2(len(non_zero_counts))
+    # Normalize by maximum possible entropy (uniform over entire catalog)
+    max_entropy = np.log2(num_items)
 
     return entropy / max_entropy if max_entropy > 0 else 0.0
 

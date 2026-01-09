@@ -14,7 +14,7 @@ def train_svd_surprise(trainset, random_state=42):
     Returns:
         SVD: Trained SVD model
     """
-    algo = SVD(random_state=random_state)
+    algo = SVD(random_state=random_state, biased=False)
     algo.fit(trainset)
     return algo
 
