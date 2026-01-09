@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import traceback
 import pandas as pd
 from data_processing import (
     load_movielens_1m_surprise,
@@ -40,6 +41,33 @@ GENERATIONS = 10  # Number of generations for evolution
 K_NDCG = 10  # Top-K for NDCG evaluation
 CROSSOVER_RATE = 0.8  # Crossover probability for genetic operators
 MUTATION_RATE = 0.2  # Mutation probability for genetic operators
+
+# Dataset configurations for the pipeline
+DATASET_CONFIGS = [
+    {
+        "name": "MovieLens 1M",
+        "load_fn": load_movielens_1m_surprise,
+        "rating_scale": (1, 5),
+    },
+    {
+        "name": "Book-Crossing",
+        "load_fn": load_book_crossing,
+        "rating_scale": (1, 10),
+        "load_kwargs": {"min_interactions": 6},
+    },
+    {
+        "name": "Video Games",
+        "load_fn": load_video_games,
+        "rating_scale": (1, 5),
+        "load_kwargs": {"min_interactions": 10},
+    },
+    {
+        "name": "Digital Music",
+        "load_fn": load_digital_music,
+        "rating_scale": (1, 5),
+        "load_kwargs": {"min_interactions": 6},
+    },
+]
 
 
 def run_pipeline(
@@ -474,173 +502,49 @@ def load_or_create_cached_data(
 
 
 def main():
-    # Set random seed FIRST before any data loading to ensure full reproducibility.
-    # Note: data_processing.py uses pandas random_state=42 internally, but this ensures
-    # any numpy/random calls during dataset configuration are also deterministic.
-    # Using module-level SEED constant for consistency.
+    # Set random seed FIRST before any data loading for full reproducibility.
     np.random.seed(SEED)
     random.seed(SEED)
 
     all_results = []
-    k_ndcg = K_NDCG  # Use module-level constant
 
-    # MovieLens 1M - Using Surprise's built-in dataset
-    try:
-        print("\n--- Loading MovieLens 1M (Surprise built-in) ---")
-        (
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            prediction_matrix,
-        ) = load_or_create_cached_data(
-            dataset_name="MovieLens 1M",
-            load_fn=load_movielens_1m_surprise,
-            rating_scale=(1, 5),
-        )
+    for config in DATASET_CONFIGS:
+        try:
+            print(f"\n--- Loading {config['name']} ---")
+            (
+                train_matrix,
+                val_matrix,
+                test_matrix,
+                user_ids,
+                item_ids,
+                activity_map,
+                train_df,
+                prediction_matrix,
+            ) = load_or_create_cached_data(
+                dataset_name=config["name"],
+                load_fn=config["load_fn"],
+                rating_scale=config.get("rating_scale", (1, 5)),
+                **config.get("load_kwargs", {}),
+            )
 
-        result = run_pipeline(
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            "MovieLens 1M",
-            k_ndcg,
-            prediction_matrix=prediction_matrix,
-        )
-        all_results.append(result)
+            result = run_pipeline(
+                train_matrix,
+                val_matrix,
+                test_matrix,
+                user_ids,
+                item_ids,
+                activity_map,
+                train_df,
+                config["name"],
+                K_NDCG,
+                rating_scale=config.get("rating_scale", (1, 5)),
+                prediction_matrix=prediction_matrix,
+            )
+            all_results.append(result)
 
-    except Exception as e:
-        print(f"Error processing MovieLens 1M: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-    # Book-Crossing dataset
-    try:
-        print("\n--- Loading Book-Crossing Dataset ---")
-        (
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            prediction_matrix,
-        ) = load_or_create_cached_data(
-            dataset_name="Book-Crossing",
-            load_fn=load_book_crossing,
-            rating_scale=(1, 10),
-            min_interactions=6,  # Passed to load_book_crossing
-        )
-
-        result = run_pipeline(
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            "Book-Crossing",
-            k_ndcg,
-            rating_scale=(1, 10),
-            prediction_matrix=prediction_matrix,
-        )
-        all_results.append(result)
-
-    except Exception as e:
-        print(f"Error processing Book-Crossing: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-    # Amazon Video Games dataset
-    try:
-        print("\n--- Loading Amazon Video Games Dataset ---")
-        (
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            prediction_matrix,
-        ) = load_or_create_cached_data(
-            dataset_name="Video Games",
-            load_fn=load_video_games,
-            rating_scale=(1, 5),
-            min_interactions=10,  # Passed to load_video_games
-        )
-
-        result = run_pipeline(
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            "Video Games",
-            k_ndcg,
-            rating_scale=(1, 5),
-            prediction_matrix=prediction_matrix,
-        )
-        all_results.append(result)
-
-    except Exception as e:
-        print(f"Error processing Video Games: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-    # Amazon Digital Music dataset
-    try:
-        print("\n--- Loading Amazon Digital Music Dataset ---")
-        (
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            prediction_matrix,
-        ) = load_or_create_cached_data(
-            dataset_name="Digital Music",
-            load_fn=load_digital_music,
-            rating_scale=(1, 5),
-            min_interactions=6,  # Passed to load_digital_music
-        )
-
-        result = run_pipeline(
-            train_matrix,
-            val_matrix,
-            test_matrix,
-            user_ids,
-            item_ids,
-            activity_map,
-            train_df,
-            "Digital Music",
-            k_ndcg,
-            rating_scale=(1, 5),
-            prediction_matrix=prediction_matrix,
-        )
-        all_results.append(result)
-
-    except Exception as e:
-        print(f"Error processing Digital Music: {e}")
-        import traceback
-
-        traceback.print_exc()
+        except Exception as e:
+            print(f"Error processing {config['name']}: {e}")
+            traceback.print_exc()
 
     # Display Results as Pandas DataFrame
     if all_results:

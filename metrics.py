@@ -141,25 +141,28 @@ def calculate_user_ndcg_scores(recs_indices, ground_truth_matrix, idcg_values):
     Returns:
         list: NDCG scores for each user
     """
-    ndcg_scores = []
-    num_users = recs_indices.shape[0]
+    num_users, top_k = recs_indices.shape
 
-    for u in range(num_users):
-        rec_inds = recs_indices[u]
-        true_ratings = ground_truth_matrix[u, rec_inds]
+    # Vectorized rating lookup using advanced indexing
+    user_indices = np.arange(num_users)[:, np.newaxis]
+    true_ratings = ground_truth_matrix[user_indices, recs_indices]
 
-        r = np.asarray(true_ratings, dtype=float)
-        if r.size:
-            dcg = dcg_at_k(r, len(r))
-            idcg = idcg_values[u]
-            if idcg > 0:
-                ndcg_scores.append(dcg / idcg)
-            else:
-                ndcg_scores.append(0.0)
-        else:
-            ndcg_scores.append(0.0)
+    # Precompute discount factors (shared for all users)
+    discount = np.log2(np.arange(2, top_k + 2))
 
-    return ndcg_scores
+    # Compute DCG for all users: sum(rating / discount) per user
+    dcg_values = np.sum(true_ratings / discount, axis=1)
+
+    # Compute NDCG with safe division (where IDCG is 0, NDCG is 0)
+    idcg_arr = np.asarray(idcg_values)
+    ndcg_scores = np.divide(
+        dcg_values,
+        idcg_arr,
+        out=np.zeros_like(dcg_values, dtype=float),
+        where=idcg_arr > 0,
+    )
+
+    return ndcg_scores.tolist()
 
 
 def get_user_ideal_dcg_from_candidates(ground_truth_matrix, candidate_lists, top_k):

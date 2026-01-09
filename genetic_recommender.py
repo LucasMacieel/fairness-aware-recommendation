@@ -274,6 +274,32 @@ class GeneticRecommender:
 
         return selected
 
+    def _create_offspring(self, parents, pop_size, crossover_rate, mutation_rate):
+        """
+        Create offspring population via crossover and mutation.
+
+        This shared method is used by both GA and NSGA-II to ensure consistent
+        reproduction logic while allowing different selection strategies.
+        """
+        offspring = []
+        while len(offspring) < pop_size:
+            p1 = parents[np.random.randint(len(parents))]
+            p2 = parents[np.random.randint(len(parents))]
+
+            if np.random.rand() < crossover_rate:
+                c1, c2 = self.crossover(p1, p2)
+            else:
+                c1, c2 = p1.copy(), p2.copy()
+
+            c1 = self.insert_mutate(c1, mutation_rate)
+            c2 = self.insert_mutate(c2, mutation_rate)
+
+            offspring.append(c1)
+            if len(offspring) < pop_size:
+                offspring.append(c2)
+
+        return offspring
+
     def run(
         self,
         generations,
@@ -306,9 +332,7 @@ class GeneticRecommender:
             best_idx = np.argmax(scores)
 
             current_best_ind = population[best_idx]
-            current_best_metrics = fitness_results[
-                best_idx
-            ]  # (score, mdcg, activity_gap, item_entropy)
+            current_best_metrics = fitness_results[best_idx]
 
             if max_score > best_score:
                 best_score = max_score
@@ -323,27 +347,12 @@ class GeneticRecommender:
             # Selection
             selected_pop = self.select(population, fitness_results)
 
-            # Reproduction
-            next_pop = []
-
-            # Elitism: keep best
-            next_pop.append(copy.deepcopy(population[best_idx]))
-
-            while len(next_pop) < pop_size:
-                p1 = selected_pop[np.random.randint(len(selected_pop))]
-                p2 = selected_pop[np.random.randint(len(selected_pop))]
-
-                if np.random.rand() < crossover_rate:
-                    c1, c2 = self.crossover(p1, p2)
-                else:
-                    c1, c2 = p1.copy(), p2.copy()
-
-                c1 = self.insert_mutate(c1, mutation_rate)
-                c2 = self.insert_mutate(c2, mutation_rate)
-
-                next_pop.append(c1)
-                if len(next_pop) < pop_size:
-                    next_pop.append(c2)
+            # Reproduction using shared helper
+            next_pop = [copy.deepcopy(population[best_idx])]  # Elitism: keep best
+            offspring = self._create_offspring(
+                selected_pop, pop_size - 1, crossover_rate, mutation_rate
+            )
+            next_pop.extend(offspring)
 
             population = next_pop
 
@@ -362,29 +371,7 @@ class NsgaIIRecommender(GeneticRecommender):
     The Pareto front itself contains all non-dominated trade-off solutions.
     """
 
-    def __init__(
-        self,
-        num_users,
-        num_items,
-        candidate_lists,
-        target_matrix,
-        activity_map,
-        item_ids,
-        user_ids=None,
-        weights=None,
-        top_k=10,
-    ):
-        super().__init__(
-            num_users,
-            num_items,
-            candidate_lists,
-            target_matrix,
-            activity_map,
-            item_ids,
-            user_ids,
-            weights,
-            top_k,
-        )
+    # Inherits __init__ from GeneticRecommender - no override needed
 
     def fast_non_dominated_sort(self, population_metrics):
         """
@@ -559,23 +546,10 @@ class NsgaIIRecommender(GeneticRecommender):
             # We select parents to create offspring
             mating_pool = self.nsga_selection(population, ranks, crowding_dists)
 
-            # 2. Reproduction to create Q_t
-            offspring_pop = []
-            while len(offspring_pop) < pop_size:
-                p1 = mating_pool[np.random.randint(len(mating_pool))]
-                p2 = mating_pool[np.random.randint(len(mating_pool))]
-
-                if np.random.rand() < crossover_rate:
-                    c1, c2 = self.crossover(p1, p2)
-                else:
-                    c1, c2 = p1.copy(), p2.copy()
-
-                c1 = self.insert_mutate(c1, mutation_rate)
-                c2 = self.insert_mutate(c2, mutation_rate)
-
-                offspring_pop.append(c1)
-                if len(offspring_pop) < pop_size:
-                    offspring_pop.append(c2)
+            # 2. Reproduction to create Q_t using shared helper
+            offspring_pop = self._create_offspring(
+                mating_pool, pop_size, crossover_rate, mutation_rate
+            )
 
             # 3. Combine R_t = P_t + Q_t
             combined_pop = population + offspring_pop

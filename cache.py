@@ -1,10 +1,3 @@
-"""
-Caching utilities for user-item matrices and prediction matrices.
-
-This module provides functions to save and load numpy arrays to disk,
-enabling faster subsequent runs by avoiding recomputation.
-"""
-
 import json
 import numpy as np
 from pathlib import Path
@@ -20,6 +13,11 @@ def get_cache_dir():
     return cache_dir
 
 
+def _sanitize_dataset_name(dataset_name: str) -> str:
+    """Sanitize dataset name for filesystem usage."""
+    return dataset_name.lower().replace(" ", "_").replace("-", "_")
+
+
 def get_cache_path(dataset_name: str, matrix_type: str) -> Path:
     """
     Generate cache file path based on dataset and matrix type.
@@ -31,8 +29,7 @@ def get_cache_path(dataset_name: str, matrix_type: str) -> Path:
     Returns:
         Path: Full path to the cache file
     """
-    # Sanitize dataset name for filesystem
-    safe_name = dataset_name.lower().replace(" ", "_").replace("-", "_")
+    safe_name = _sanitize_dataset_name(dataset_name)
     filename = f"{safe_name}_{matrix_type}.npy"
     return get_cache_dir() / filename
 
@@ -82,7 +79,7 @@ def save_metadata(
         activity_map: Optional dict mapping user_id -> activity group
     """
     cache_dir = get_cache_dir()
-    safe_name = dataset_name.lower().replace(" ", "_").replace("-", "_")
+    safe_name = _sanitize_dataset_name(dataset_name)
     metadata_path = cache_dir / f"{safe_name}_metadata.json"
 
     metadata = {
@@ -107,7 +104,7 @@ def load_metadata(dataset_name: str) -> tuple:
         tuple: (user_ids, item_ids, activity_map) or None if not found
     """
     cache_dir = get_cache_dir()
-    safe_name = dataset_name.lower().replace(" ", "_").replace("-", "_")
+    safe_name = _sanitize_dataset_name(dataset_name)
     metadata_path = cache_dir / f"{safe_name}_metadata.json"
 
     if not metadata_path.exists():
@@ -158,37 +155,10 @@ def all_matrices_cached(dataset_name: str, include_prediction: bool = False) -> 
 
     # Also check metadata
     cache_dir = get_cache_dir()
-    safe_name = dataset_name.lower().replace(" ", "_").replace("-", "_")
+    safe_name = _sanitize_dataset_name(dataset_name)
     metadata_path = cache_dir / f"{safe_name}_metadata.json"
 
     if not metadata_path.exists():
         return False
 
     return all(cache_exists(paths[key]) for key in required)
-
-
-def clear_cache(dataset_name: str = None) -> None:
-    """
-    Clear cache files.
-
-    Args:
-        dataset_name: If provided, clear only caches for this dataset.
-                     If None, clear all caches.
-    """
-    cache_dir = get_cache_dir()
-
-    if not cache_dir.exists():
-        return
-
-    if dataset_name:
-        safe_name = dataset_name.lower().replace(" ", "_").replace("-", "_")
-        for f in cache_dir.glob(f"{safe_name}_*"):
-            f.unlink()
-            print(f"  -> Deleted: {f.name}")
-    else:
-        for f in cache_dir.glob("*.npy"):
-            f.unlink()
-            print(f"  -> Deleted: {f.name}")
-        for f in cache_dir.glob("*.json"):
-            f.unlink()
-            print(f"  -> Deleted: {f.name}")

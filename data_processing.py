@@ -1,5 +1,59 @@
+import os
 import pandas as pd
 from surprise import Dataset, Reader
+
+
+# --- Helper Functions for Dataset Loading ---
+
+
+def _find_file(filepath, alt_paths, dataset_name):
+    """Find dataset file, trying alternate paths if primary not found."""
+    if os.path.exists(filepath):
+        return filepath
+    for alt in alt_paths:
+        if os.path.exists(alt):
+            return alt
+    raise FileNotFoundError(f"{dataset_name} dataset not found at {filepath}")
+
+
+def _apply_kcore_filter(df, min_interactions, dataset_name):
+    """Apply iterative k-core filtering until convergence."""
+    prev_len = 0
+    while len(df) != prev_len:
+        prev_len = len(df)
+        # Filter users with at least min_interactions
+        user_counts = df["user_id"].value_counts()
+        valid_users = user_counts[user_counts >= min_interactions].index
+        df = df[df["user_id"].isin(valid_users)]
+        # Filter items with at least min_interactions
+        item_counts = df["item_id"].value_counts()
+        valid_items = item_counts[item_counts >= min_interactions].index
+        df = df[df["item_id"].isin(valid_items)]
+    print(
+        f"{dataset_name}: After {min_interactions}-core filtering: "
+        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
+    )
+    return df
+
+
+def _deduplicate_ratings(df, dataset_name):
+    """Handle duplicate (user_id, item_id) pairs by taking mean rating."""
+    duplicates = df.duplicated(subset=["user_id", "item_id"], keep=False).sum()
+    if duplicates > 0:
+        print(
+            f"{dataset_name}: Found {duplicates} duplicate entries, aggregating with mean..."
+        )
+        df = df.groupby(["user_id", "item_id"], as_index=False)["rating"].mean()
+        print(f"{dataset_name}: After deduplication: {len(df)} unique ratings")
+    return df
+
+
+def _standardize_columns(df):
+    """Convert user_id, item_id to string and rating to float."""
+    df["user_id"] = df["user_id"].astype(str)
+    df["item_id"] = df["item_id"].astype(str)
+    df["rating"] = df["rating"].astype(float)
+    return df
 
 
 def load_movielens_1m_surprise():
@@ -31,9 +85,6 @@ def load_book_crossing(filepath="data/book_crossing.csv", min_interactions=5):
     """
     Load Book-Crossing dataset from local CSV file with k-core filtering.
 
-    The Book-Crossing dataset uses semicolon-separated values with columns:
-    User-ID, ISBN, Rating (0-10 scale, 0 = implicit rating)
-
     Args:
         filepath: Path to the book_crossing.csv file
         min_interactions: Minimum interactions per user AND item (k-core filtering)
@@ -41,75 +92,32 @@ def load_book_crossing(filepath="data/book_crossing.csv", min_interactions=5):
     Returns:
         pd.DataFrame: DataFrame with user_id, item_id, rating columns
     """
-    import os
+    alt_paths = [
+        os.path.join("data", "book_crossing.csv"),
+        os.path.join("..", "data", "book_crossing.csv"),
+    ]
+    filepath = _find_file(filepath, alt_paths, "Book-Crossing")
 
-    # Find the file
-    if not os.path.exists(filepath):
-        # Try relative paths
-        alt_paths = [
-            os.path.join("data", "book_crossing.csv"),
-            os.path.join("..", "data", "book_crossing.csv"),
-        ]
-        for alt in alt_paths:
-            if os.path.exists(alt):
-                filepath = alt
-                break
-        else:
-            raise FileNotFoundError(f"Book-Crossing dataset not found at {filepath}")
-
-    # Load the CSV with semicolon separator
+    # Load CSV with semicolon separator and rename columns
     df = pd.read_csv(filepath, sep=";", encoding="latin-1")
-
-    # Rename columns to match pipeline expectations
     df = df.rename(
         columns={"User-ID": "user_id", "ISBN": "item_id", "Book-Rating": "rating"}
     )
-
-    # Handle potential column name variations
     if "Rating" in df.columns:
         df = df.rename(columns={"Rating": "rating"})
 
-    # Convert types
-    df["user_id"] = df["user_id"].astype(str)
-    df["item_id"] = df["item_id"].astype(str)
-    df["rating"] = df["rating"].astype(float)
+    df = _standardize_columns(df)
 
-    # Filter out implicit ratings (rating = 0) for explicit feedback only
+    # Filter out implicit ratings (rating = 0)
     df = df[df["rating"] > 0]
     print(f"Book-Crossing: {len(df)} explicit ratings (filtered out rating=0)")
 
-    # Apply k-core filtering iteratively until convergence
-    # Keep only users and items with at least min_interactions
-    prev_len = 0
-    iteration = 0
-    while len(df) != prev_len:
-        prev_len = len(df)
-        iteration += 1
-
-        # Filter users with at least min_interactions
-        user_counts = df["user_id"].value_counts()
-        valid_users = user_counts[user_counts >= min_interactions].index
-        df = df[df["user_id"].isin(valid_users)]
-
-        # Filter items with at least min_interactions
-        item_counts = df["item_id"].value_counts()
-        valid_items = item_counts[item_counts >= min_interactions].index
-        df = df[df["item_id"].isin(valid_items)]
-
-    print(
-        f"Book-Crossing: After {min_interactions}-core filtering: "
-        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
-    )
-
-    return df
+    return _apply_kcore_filter(df, min_interactions, "Book-Crossing")
 
 
 def load_digital_music(filepath="data/digital_music.csv", min_interactions=5):
     """
     Load Amazon Digital Music dataset from local CSV file with k-core filtering.
-
-    The Digital Music dataset has columns:
-    user_id, item_id, rating (1-5 scale)
 
     Args:
         filepath: Path to the digital_music.csv file
@@ -118,74 +126,23 @@ def load_digital_music(filepath="data/digital_music.csv", min_interactions=5):
     Returns:
         pd.DataFrame: DataFrame with user_id, item_id, rating columns
     """
-    import os
+    alt_paths = [
+        os.path.join("data", "digital_music.csv"),
+        os.path.join("..", "data", "digital_music.csv"),
+    ]
+    filepath = _find_file(filepath, alt_paths, "Digital Music")
 
-    # Find the file
-    if not os.path.exists(filepath):
-        # Try relative paths
-        alt_paths = [
-            os.path.join("data", "digital_music.csv"),
-            os.path.join("..", "data", "digital_music.csv"),
-        ]
-        for alt in alt_paths:
-            if os.path.exists(alt):
-                filepath = alt
-                break
-        else:
-            raise FileNotFoundError(f"Digital Music dataset not found at {filepath}")
-
-    # Load the CSV
     df = pd.read_csv(filepath)
-
-    # Convert types
-    df["user_id"] = df["user_id"].astype(str)
-    df["item_id"] = df["item_id"].astype(str)
-    df["rating"] = df["rating"].astype(float)
-
+    df = _standardize_columns(df)
     print(f"Digital Music: {len(df)} total ratings loaded")
 
-    # Handle duplicate (user_id, item_id) pairs by taking mean rating
-    # This prevents pivot errors downstream when creating user-item matrices
-    duplicates = df.duplicated(subset=["user_id", "item_id"], keep=False).sum()
-    if duplicates > 0:
-        print(
-            f"Digital Music: Found {duplicates} duplicate entries, aggregating with mean..."
-        )
-        df = df.groupby(["user_id", "item_id"], as_index=False)["rating"].mean()
-        print(f"Digital Music: After deduplication: {len(df)} unique ratings")
-
-    # Apply k-core filtering iteratively until convergence
-    # Keep only users and items with at least min_interactions
-    prev_len = 0
-    iteration = 0
-    while len(df) != prev_len:
-        prev_len = len(df)
-        iteration += 1
-
-        # Filter users with at least min_interactions
-        user_counts = df["user_id"].value_counts()
-        valid_users = user_counts[user_counts >= min_interactions].index
-        df = df[df["user_id"].isin(valid_users)]
-
-        # Filter items with at least min_interactions
-        item_counts = df["item_id"].value_counts()
-        valid_items = item_counts[item_counts >= min_interactions].index
-        df = df[df["item_id"].isin(valid_items)]
-
-    print(
-        f"Digital Music: After {min_interactions}-core filtering: "
-        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
-    )
-
-    return df
+    df = _deduplicate_ratings(df, "Digital Music")
+    return _apply_kcore_filter(df, min_interactions, "Digital Music")
 
 
 def load_video_games(filepath="data/video_games.csv", min_interactions=5):
     """
-    Load Amazon Video Games 5-core dataset from local CSV file with k-core filtering.
-
-    The Video Games dataset has columns:
-    user_id, item_id, rating (1-5 scale)
+    Load Amazon Video Games dataset from local CSV file with k-core filtering.
 
     Args:
         filepath: Path to the video_games.csv file
@@ -194,66 +151,18 @@ def load_video_games(filepath="data/video_games.csv", min_interactions=5):
     Returns:
         pd.DataFrame: DataFrame with user_id, item_id, rating columns
     """
-    import os
+    alt_paths = [
+        os.path.join("data", "video_games.csv"),
+        os.path.join("..", "data", "video_games.csv"),
+    ]
+    filepath = _find_file(filepath, alt_paths, "Video Games")
 
-    # Find the file
-    if not os.path.exists(filepath):
-        # Try relative paths
-        alt_paths = [
-            os.path.join("data", "video_games.csv"),
-            os.path.join("..", "data", "video_games.csv"),
-        ]
-        for alt in alt_paths:
-            if os.path.exists(alt):
-                filepath = alt
-                break
-        else:
-            raise FileNotFoundError(f"Video Games dataset not found at {filepath}")
-
-    # Load the CSV
     df = pd.read_csv(filepath)
-
-    # Convert types
-    df["user_id"] = df["user_id"].astype(str)
-    df["item_id"] = df["item_id"].astype(str)
-    df["rating"] = df["rating"].astype(float)
-
+    df = _standardize_columns(df)
     print(f"Video Games: {len(df)} total ratings loaded")
 
-    # Handle duplicate (user_id, item_id) pairs by taking mean rating
-    # This prevents pivot errors downstream when creating user-item matrices
-    duplicates = df.duplicated(subset=["user_id", "item_id"], keep=False).sum()
-    if duplicates > 0:
-        print(
-            f"Video Games: Found {duplicates} duplicate entries, aggregating with mean..."
-        )
-        df = df.groupby(["user_id", "item_id"], as_index=False)["rating"].mean()
-        print(f"Video Games: After deduplication: {len(df)} unique ratings")
-
-    # Apply k-core filtering iteratively until convergence
-    # Keep only users and items with at least min_interactions
-    prev_len = 0
-    iteration = 0
-    while len(df) != prev_len:
-        prev_len = len(df)
-        iteration += 1
-
-        # Filter users with at least min_interactions
-        user_counts = df["user_id"].value_counts()
-        valid_users = user_counts[user_counts >= min_interactions].index
-        df = df[df["user_id"].isin(valid_users)]
-
-        # Filter items with at least min_interactions
-        item_counts = df["item_id"].value_counts()
-        valid_items = item_counts[item_counts >= min_interactions].index
-        df = df[df["item_id"].isin(valid_items)]
-
-    print(
-        f"Video Games: After {min_interactions}-core filtering: "
-        f"{len(df)} ratings, {df['user_id'].nunique()} users, {df['item_id'].nunique()} items"
-    )
-
-    return df
+    df = _deduplicate_ratings(df, "Video Games")
+    return _apply_kcore_filter(df, min_interactions, "Video Games")
 
 
 def df_to_surprise_trainset(df, rating_scale=(1, 5)):
