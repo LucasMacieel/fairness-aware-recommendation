@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from typing import Any, TYPE_CHECKING
+import traceback
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
+from numpy.typing import NDArray
 from surprise import Dataset, Reader
 
 if TYPE_CHECKING:
@@ -376,7 +377,6 @@ def main() -> None:
         print(f"ML-1M Activity Map Size: {len(activity_map)}")
     except Exception as e:
         print(e)
-        import traceback
 
         traceback.print_exc()
 

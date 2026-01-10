@@ -182,6 +182,8 @@ class GeneticRecommender:
         2. Copy the segment between points from parent1 to child1
         3. Fill remaining positions with genes from parent2 in order, skipping duplicates
         4. Symmetric operation for child2
+
+        Optimized using NumPy boolean arrays instead of Python sets.
         """
         size = len(p1)
         # Select two random cut points
@@ -190,39 +192,32 @@ class GeneticRecommender:
         start, end = min(a, b), max(a, b) + 1  # Slice end is exclusive
 
         # Initialize children
-        c1 = np.full(size, -1, dtype=p1.dtype)
-        c2 = np.full(size, -1, dtype=p2.dtype)
+        c1 = np.empty(size, dtype=p1.dtype)
+        c2 = np.empty(size, dtype=p2.dtype)
 
         # Copy segments from respective parents
         c1[start:end] = p1[start:end]
         c2[start:end] = p2[start:end]
 
-        # Create sets for quick lookup of copied genes
-        c1_set = set(p1[start:end])
-        c2_set = set(p2[start:end])
+        # Use NumPy boolean arrays for fast membership checking
+        # np.isin() is faster than Python set for NumPy arrays
+        c1_copied = p1[start:end]
+        c2_copied = p2[start:end]
 
-        # Fill child1 with genes from parent2 (in order, starting after end)
-        # Wrap around the chromosome
-        fill_pos = end % size
-        for i in range(size):
-            gene = p2[(end + i) % size]
-            if gene not in c1_set:
-                c1[fill_pos] = gene
-                fill_pos = (fill_pos + 1) % size
-                # Skip the copied segment
-                if fill_pos == start:
-                    fill_pos = end % size
+        # Get genes from other parent that aren't in the copied segment
+        # Order matters: wrap around starting from 'end'
+        p2_order = np.concatenate([p2[end:], p2[:end]])
+        p1_order = np.concatenate([p1[end:], p1[:end]])
 
-        # Fill child2 with genes from parent1 (in order, starting after end)
-        fill_pos = end % size
-        for i in range(size):
-            gene = p1[(end + i) % size]
-            if gene not in c2_set:
-                c2[fill_pos] = gene
-                fill_pos = (fill_pos + 1) % size
-                # Skip the copied segment
-                if fill_pos == start:
-                    fill_pos = end % size
+        # Filter out genes already in copied segment
+        c1_fill = p2_order[~np.isin(p2_order, c1_copied)]
+        c2_fill = p1_order[~np.isin(p1_order, c2_copied)]
+
+        # Fill positions outside the copied segment
+        # Positions to fill: [end, end+1, ..., size-1, 0, 1, ..., start-1]
+        fill_positions = np.concatenate([np.arange(end, size), np.arange(0, start)])
+        c1[fill_positions] = c1_fill
+        c2[fill_positions] = c2_fill
 
         return c1, c2
 
@@ -400,7 +395,7 @@ class NsgaIIRecommender(GeneticRecommender):
         self, population_metrics: list[FitnessResult]
     ) -> tuple[list[list[int]], list[int]]:
         """
-        Sorts the population into fronts.
+        Sorts the population into fronts using vectorized domination checking.
         population_metrics: list of tuples (score, mdcg, activity_gap, item_entropy)
         We want to:
          - Maximize MDCG -> Minimize -MDCG
@@ -408,41 +403,38 @@ class NsgaIIRecommender(GeneticRecommender):
          - Maximize Item Entropy -> Minimize -Item Entropy
         """
         pop_size = len(population_metrics)
-        S = [[] for _ in range(pop_size)]
-        n = [0] * pop_size
+
+        # Convert to minimization problem - vectorized
+        objectives = np.array([[-m[1], m[2], -m[3]] for m in population_metrics])
+
+        # Vectorized domination check using broadcasting
+        # diff[i, j, k] = objectives[i, k] - objectives[j, k]
+        # Shape: (pop_size, pop_size, num_objectives)
+        diff = objectives[:, np.newaxis, :] - objectives[np.newaxis, :, :]
+
+        # i dominates j if: all(diff[i,j,:] <= 0) AND any(diff[i,j,:] < 0)
+        all_leq = np.all(diff <= 0, axis=2)  # (pop_size, pop_size)
+        any_lt = np.any(diff < 0, axis=2)  # (pop_size, pop_size)
+        dominates = all_leq & any_lt  # (pop_size, pop_size)
+
+        # Remove self-domination (diagonal)
+        np.fill_diagonal(dominates, False)
+
+        # S[i] = list of indices that i dominates
+        # n[i] = count of individuals that dominate i
+        S = [list(np.where(dominates[i])[0]) for i in range(pop_size)]
+        n = np.sum(dominates, axis=0).tolist()  # Column sum = how many dominate each
+
         rank = [0] * pop_size
         fronts = [[]]
 
-        # Convert to minimization problem
-        objectives = []
-        for m in population_metrics:
-            # m = (score, mdcg, activity_gap, item_entropy)
-            # Obj 1: -MDCG
-            # Obj 2: Activity Gap
-            # Obj 3: -Item Entropy
-            objectives.append([-m[1], m[2], -m[3]])
+        # First front: individuals with n[i] == 0
+        for i in range(pop_size):
+            if n[i] == 0:
+                rank[i] = 0
+                fronts[0].append(i)
 
-        objectives = np.array(objectives)
-
-        for p in range(pop_size):
-            p_obj = objectives[p]
-            for q in range(pop_size):
-                if p == q:
-                    continue
-                q_obj = objectives[q]
-
-                # Check domination
-                # p dominates q if p <= q for all obj AND p < q for at least one
-                diff = p_obj - q_obj
-                if np.all(diff <= 0) and np.any(diff < 0):
-                    S[p].append(q)
-                elif np.all(diff >= 0) and np.any(diff > 0):
-                    n[p] += 1
-
-            if n[p] == 0:
-                rank[p] = 0
-                fronts[0].append(p)
-
+        # Build subsequent fronts
         i = 0
         while i < len(fronts):
             current_front = fronts[i]

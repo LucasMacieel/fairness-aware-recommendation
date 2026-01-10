@@ -5,8 +5,8 @@ import traceback
 from typing import Any, Callable
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
+from numpy.typing import NDArray
 
 from cache import (
     all_matrices_cached,

@@ -57,7 +57,6 @@ pip install -r requirements.txt
 - pandas
 - matplotlib
 - scikit-surprise
-- xlrd
 
 ### Python Version
 Python 3.8+ recommended

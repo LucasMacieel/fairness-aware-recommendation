@@ -208,19 +208,22 @@ def get_user_ideal_dcg_from_candidates(
         If a user's candidates have ratings [5, 0, 3, 4, 0, ...], the IDCG is
         computed from sorted([5, 4, 3, 0, 0, ...])[:k], not from ALL items globally.
     """
-    num_users = ground_truth_matrix.shape[0]
-    idcg_scores = []
+    # Vectorized: Get all candidate ratings at once using advanced indexing
+    user_indices = np.arange(ground_truth_matrix.shape[0])[:, np.newaxis]
+    candidate_ratings = ground_truth_matrix[
+        user_indices, candidate_lists
+    ]  # (num_users, candidate_size)
 
-    for user_idx in range(num_users):
-        # Get ratings for ONLY the candidate items
-        candidate_indices = candidate_lists[user_idx]
-        candidate_ratings = ground_truth_matrix[user_idx, candidate_indices]
+    # Sort each row in descending order and take top_k
+    sorted_ratings = np.sort(candidate_ratings, axis=1)[:, ::-1][
+        :, :top_k
+    ]  # (num_users, top_k)
 
-        # IDCG = DCG of the best possible ordering of candidate items
-        best_possible_dcg = dcg_at_k(sorted(candidate_ratings, reverse=True), top_k)
-        idcg_scores.append(best_possible_dcg)
+    # Vectorized DCG: sum(rating / log2(rank + 2)) for each user
+    discount = np.log2(np.arange(2, top_k + 2))  # (top_k,)
+    idcg_values = np.sum(sorted_ratings / discount, axis=1)
 
-    return np.array(idcg_scores)
+    return idcg_values
 
 
 def compute_weighted_score(
