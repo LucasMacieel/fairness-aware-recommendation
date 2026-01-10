@@ -1,6 +1,6 @@
 # Fairness-Aware Recommendation System
 
-A research project implementing fairness-aware collaborative filtering using genetic algorithms (GA) and multi-objective optimization (NSGA-II) to balance recommendation accuracy with user fairness and item diversity.
+A research project implementing fairness-aware collaborative filtering using multi-objective optimization (NSGA-II) to balance recommendation accuracy with user fairness and item diversity.
 
 ## 🎯 Overview
 
@@ -33,7 +33,7 @@ fairness-aware-recommendation/
 ├── main.py                  # Main pipeline orchestrator
 ├── data_processing.py       # Dataset loading, splitting, and preprocessing
 ├── recommender.py           # SVD training and prediction matrix generation
-├── genetic_recommender.py   # GA and NSGA-II optimization algorithms
+├── genetic_recommender.py   # NSGA-II optimization algorithm
 ├── metrics.py               # Evaluation metrics (NDCG, Activity Gap, Entropy)
 ├── cache.py                 # Caching system for matrices and metadata
 ├── process.py               # Utility scripts for dataset conversion
@@ -73,11 +73,10 @@ This will:
 1. Load and preprocess all configured datasets
 2. Train SVD models for rating prediction
 3. Generate candidate recommendation lists
-4. Run Genetic Algorithm optimization
-5. Run NSGA-II multi-objective optimization
-6. Evaluate all methods on held-out test data
-7. Generate Pareto front visualizations
-8. Output comparison tables
+4. Run NSGA-II multi-objective optimization
+5. Evaluate all methods on held-out test data
+6. Generate Pareto front visualizations
+7. Output comparison tables
 
 ### Pipeline Configuration
 
@@ -86,11 +85,11 @@ Key parameters in `main.py`:
 ```python
 SEED = 42              # Random seed for reproducibility
 CANDIDATE_SIZE = 100   # Candidates per user for re-ranking
-POP_SIZE = 100         # Population size for GA/NSGA-II
+POP_SIZE = 100         # Population size for NSGA-II
 GENERATIONS = 10       # Number of evolutionary generations
 K_NDCG = 10            # Top-K for evaluation
-CROSSOVER_RATE = 0.8   # Genetic crossover probability
-MUTATION_RATE = 0.2    # Genetic mutation probability
+CROSSOVER_RATE = 0.8   # Crossover probability
+MUTATION_RATE = 0.2    # Mutation probability
 ```
 
 ## 📈 Methodology
@@ -109,17 +108,12 @@ MUTATION_RATE = 0.2    # Genetic mutation probability
 - Top-100 candidates per user based on SVD predictions
 - Shared candidate pool across all methods for fair comparison
 
-### 4. Optimization Algorithms
+### 4. NSGA-II Optimization
 
-#### Genetic Algorithm (GA)
-- **Weighted single-objective** optimization
-- Fitness: `w_mdcg * MDCG - w_gap * Activity_Gap + w_entropy * Entropy`
-- Operators: Order Crossover (OX), Insert Mutation, Tournament Selection
-
-#### NSGA-II
 - **True multi-objective** optimization using Pareto dominance
 - No weights during optimization—discovers trade-off surface
 - Returns Pareto front of non-dominated solutions
+- Operators: Order Crossover (OX), Insert Mutation, Binary Tournament Selection
 - Final solution selected using weighted criteria for comparison
 
 ### 5. Evaluation
@@ -163,10 +157,10 @@ To force a fresh run, delete the cache files or set `use_cache=False`.
 ## 📝 Output Example
 
 ```
-=== DATASET COMPARISON (Baseline vs GA - TEST SET) ===
-Dataset        Users   Items   Density  Baseline MDCG  GA MDCG  NSGA-II MDCG  ...
-MovieLens 1M   6040    3706    0.0447   0.3521         0.3498   0.3512        ...
-Book-Crossing  2531    8234    0.0124   0.2845         0.2812   0.2831        ...
+=== DATASET COMPARISON (Baseline vs NSGA-II - TEST SET) ===
+Dataset        Users   Items   Density  Baseline MDCG  NSGA-II MDCG  ...
+MovieLens 1M   6040    3706    0.0447   0.3521         0.3512        ...
+Book-Crossing  2531    8234    0.0124   0.2845         0.2831        ...
 ...
 ```
 

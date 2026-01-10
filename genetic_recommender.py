@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import numpy as np
@@ -19,7 +18,7 @@ Population = list[Individual]
 FitnessResult = tuple[float, float, float, float]  # (score, mdcg, gap, entropy)
 
 
-class GeneticRecommender:
+class BaseEvolutionaryRecommender:
     def __init__(
         self,
         num_users: int,
@@ -36,14 +35,13 @@ class GeneticRecommender:
         candidate_lists: np.array of shape (num_users, M), where M > k.
                          Contains item INDICES (not IDs) sorted by predicted score.
         target_matrix: np.array of shape (num_users, num_items). Ground truth ratings
-                       from the validation set (used during GA/NSGA-II optimization).
+                       from the validation set (used during NSGA-II optimization).
                        Final evaluation is performed separately on the held-out test set.
         activity_map: dict mapping user_id -> 'active'/'inactive' (uses user_ids as keys)
         user_ids: list of original user IDs (index -> user_id mapping). Required for
                   consistent activity_gap calculation with main.py evaluation.
         weights: dict with keys 'mdcg', 'activity_gap', 'item_entropy'.
-                 For GA: Used directly in fitness optimization (weighted sum).
-                 For NSGA-II: Only used post-hoc to select representative solution from Pareto front.
+                 Used post-hoc to select representative solution from Pareto front.
                  Defaults to DEFAULT_WEIGHTS from metrics.py.
         """
         if weights is None:
@@ -101,9 +99,9 @@ class GeneticRecommender:
         - DCG numerator: Computed from target_matrix (validation set during optimization)
         - IDCG denominator: Pre-calculated from target_matrix via set_user_idcg_values()
 
-        This ensures the GA optimizes on validation set ground-truth relevance,
+        This ensures optimization uses validation set ground-truth relevance,
         while final evaluation is performed separately on the held-out test set.
-        Both baseline and GA/NSGA-II use the same IDCG normalization approach.
+        Both baseline and NSGA-II use the same IDCG normalization approach.
         """
         # 1. Decode to get recommendations
         recs_indices = self.decode(individual)
@@ -261,31 +259,6 @@ class GeneticRecommender:
 
         return individual
 
-    def select(
-        self, population: Population, fitnesses: list[FitnessResult]
-    ) -> Population:
-        """
-        Tournament Selection
-        """
-        selected = []
-        pop_len = len(population)
-        tournament_size = 3
-
-        for _ in range(pop_len):
-            # Pick random competitors
-            inds = np.random.randint(0, pop_len, tournament_size)
-            best_idx = inds[0]
-            best_fit = fitnesses[best_idx][0]  # fitness is tuple (score, ...)
-
-            for i in inds[1:]:
-                if fitnesses[i][0] > best_fit:
-                    best_fit = fitnesses[i][0]
-                    best_idx = i
-
-            selected.append(population[best_idx])
-
-        return selected
-
     def _create_offspring(
         self,
         parents: Population,
@@ -295,9 +268,6 @@ class GeneticRecommender:
     ) -> Population:
         """
         Create offspring population via crossover and mutation.
-
-        This shared method is used by both GA and NSGA-II to ensure consistent
-        reproduction logic while allowing different selection strategies.
         """
         offspring = []
         while len(offspring) < pop_size:
@@ -318,78 +288,20 @@ class GeneticRecommender:
 
         return offspring
 
-    def run(
-        self,
-        generations: int,
-        pop_size: int,
-        crossover_rate: float,
-        mutation_rate: float,
-        initial_population: Population | None = None,
-    ) -> tuple[Individual | None, list[FitnessResult]]:
-        # Use provided initial population if available, otherwise generate new one
-        if initial_population is not None:
-            # Deep copy to avoid modifying the shared population
-            population = [ind.copy() for ind in initial_population]
-        else:
-            population = self.initialize_population(pop_size)
 
-        best_overall = None
-        best_score = -np.inf
-
-        history = []
-
-        print(f"Starting Evolution: Pop={pop_size}, Gens={generations}")
-
-        for gen in range(generations):
-            # Evaluate
-            fitness_results = [self.fitness(ind) for ind in population]
-            scores = [f[0] for f in fitness_results]
-
-            # Stats
-            max_score = np.max(scores)
-            best_idx = np.argmax(scores)
-
-            current_best_ind = population[best_idx]
-            current_best_metrics = fitness_results[best_idx]
-
-            if max_score > best_score:
-                best_score = max_score
-                best_overall = copy.deepcopy(current_best_ind)
-
-            history.append(current_best_metrics)
-
-            print(
-                f"Gen {gen}: Best Score={max_score:.4f}, MDCG={current_best_metrics[1]:.4f}, Activity Gap={current_best_metrics[2]:.4f}, Item Entropy={current_best_metrics[3]:.4f}"
-            )
-
-            # Selection
-            selected_pop = self.select(population, fitness_results)
-
-            # Reproduction using shared helper
-            next_pop = [copy.deepcopy(population[best_idx])]  # Elitism: keep best
-            offspring = self._create_offspring(
-                selected_pop, pop_size - 1, crossover_rate, mutation_rate
-            )
-            next_pop.extend(offspring)
-
-            population = next_pop
-
-        return best_overall, history
-
-
-class NsgaIIRecommender(GeneticRecommender):
+class NsgaIIRecommender(BaseEvolutionaryRecommender):
     """
     NSGA-II Multi-Objective Recommender.
 
-    Unlike GeneticRecommender, this class performs true multi-objective optimization
-    using Pareto dominance. The 'weights' parameter is NOT used during optimization;
-    instead, it's only used post-hoc to select a single representative solution
-    from the Pareto front for comparison in results tables.
+    This class performs true multi-objective optimization using Pareto dominance.
+    The 'weights' parameter is NOT used during optimization; instead, it's only
+    used post-hoc to select a single representative solution from the Pareto front
+    for comparison in results tables.
 
     The Pareto front itself contains all non-dominated trade-off solutions.
     """
 
-    # Inherits __init__ from GeneticRecommender - no override needed
+    # Inherits __init__ from BaseEvolutionaryRecommender - no override needed
 
     def fast_non_dominated_sort(
         self, population_metrics: list[FitnessResult]
@@ -545,7 +457,7 @@ class NsgaIIRecommender(GeneticRecommender):
         # Initial Evaluate
         fitness_results = [self.fitness(ind) for ind in population]
 
-        # Log initial population metrics (before any evolution, for fair comparison with GA)
+        # Log initial population metrics (before any evolution)
         scores = [f[0] for f in fitness_results]
         best_idx = np.argmax(scores)
         initial_best = fitness_results[best_idx]

@@ -5,7 +5,7 @@ from numpy.typing import ArrayLike, NDArray
 import warnings
 
 # --- Module-Level Constants ---
-# Single source of truth for default weights used by GA/NSGA-II
+# Single source of truth for default weights used by NSGA-II
 DEFAULT_WEIGHTS: dict[str, float] = {
     "mdcg": 1.0,
     "activity_gap": 1.0,
@@ -27,7 +27,7 @@ def dcg_at_k(r: ArrayLike, k: int) -> float:
 
 # NOTE: ndcg_at_k and calculate_ndcg_scores were removed as they are unused.
 # The pipeline uses calculate_user_ndcg_scores with pre-calculated IDCG instead,
-# ensuring consistent normalization between baseline and GA/NSGA-II evaluations.
+# ensuring consistent normalization between baseline and NSGA-II evaluations.
 
 
 def calculate_activity_gap(
@@ -149,7 +149,7 @@ def calculate_user_ndcg_scores(
     Calculate NDCG scores for each user based on their recommendations.
 
     This is the centralized function for NDCG calculation used by both
-    baseline evaluation and GA/NSGA-II evaluation to ensure consistency.
+    baseline evaluation and NSGA-II evaluation to ensure consistency.
 
     Args:
         recs_indices: array of shape (num_users, k) with recommended item indices

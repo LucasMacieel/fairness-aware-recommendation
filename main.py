@@ -26,7 +26,7 @@ from data_processing import (
     load_video_games,
     split_train_val_test_stratified,
 )
-from genetic_recommender import GeneticRecommender, NsgaIIRecommender
+from genetic_recommender import NsgaIIRecommender
 from metrics import (
     DEFAULT_WEIGHTS,
     calculate_activity_gap,
@@ -42,7 +42,7 @@ from utils.plotter import plot_pairwise_pareto
 # Centralized for consistency across the pipeline
 SEED = 42
 CANDIDATE_SIZE = 100  # Number of candidates per user for re-ranking
-POP_SIZE = 100  # Population size for GA/NSGA-II
+POP_SIZE = 100  # Population size for NSGA-II
 GENERATIONS = 10  # Number of generations for evolution
 K_NDCG = 10  # Top-K for NDCG evaluation
 CROSSOVER_RATE = 0.8  # Crossover probability for genetic operators
@@ -93,7 +93,7 @@ def run_pipeline(
     Run the recommendation pipeline with train/validation/test split.
 
     - train_matrix: Used for SVD training
-    - val_matrix: Used for GA/NSGA-II optimization (ground truth during optimization)
+    - val_matrix: Used for NSGA-II optimization (ground truth during optimization)
     - test_matrix: Used for final unbiased evaluation only
     - train_df: Training DataFrame needed for Surprise SVD training (not needed if prediction_matrix provided)
     - rating_scale: Tuple of (min_rating, max_rating) for the dataset
@@ -107,7 +107,7 @@ def run_pipeline(
     print(f"Validation Matrix Shape: {val_matrix.shape}")
     print(f"Test Matrix Shape: {test_matrix.shape}")
     print(
-        f"GA Parameters: Pop={POP_SIZE}, Gen={GENERATIONS}, Crossover={CROSSOVER_RATE}, Mutation={MUTATION_RATE}, Candidates={CANDIDATE_SIZE}, Top-K={k_ndcg}"
+        f"NSGA-II Parameters: Pop={POP_SIZE}, Gen={GENERATIONS}, Crossover={CROSSOVER_RATE}, Mutation={MUTATION_RATE}, Candidates={CANDIDATE_SIZE}, Top-K={k_ndcg}"
     )
 
     # --- Validate user_ids ordering matches matrix indices ---
@@ -154,7 +154,7 @@ def run_pipeline(
     # --- Generate Candidate Lists FIRST (needed for IDCG and baseline comparison) ---
     num_users, num_items = train_matrix.shape
 
-    # The GA/NSGA-II can only recommend items from the candidate pool, not the full item catalog.
+    # NSGA-II can only recommend items from the candidate pool, not the full item catalog.
     # This is a design choice to simulate realistic re-ranking scenarios.
     print(f"Generating Top-{CANDIDATE_SIZE} candidates for all methods...")
 
@@ -180,10 +180,10 @@ def run_pipeline(
         test_matrix, candidate_lists, top_k=k_ndcg
     )
 
-    # --- Baseline Evaluation (using same candidate pool as GA for fair comparison) ---
+    # --- Baseline Evaluation (using same candidate pool as NSGA-II for fair comparison) ---
     print(f"\nEvaluating Baseline Recommender (NDCG@{k_ndcg})...")
 
-    # Baseline: Top-K from candidate list (same constraint as GA)
+    # Baseline: Top-K from candidate list (same constraint as NSGA-II)
     # This ensures fair comparison - baseline also limited to same candidate pool
     baseline_recs_indices = np.zeros((num_users, k_ndcg), dtype=int)
 
@@ -218,90 +218,32 @@ def run_pipeline(
         f"Item Entropy={baseline_item_entropy:.4f}"
     )
 
-    # --- Genetic Algorithm ---
-    # The GA re-ranks candidates to improve Fairness while maintaining relevance.
-    # NOTE: GA optimizes on VALIDATION set, final evaluation is on TEST set.
-    print(f"\nRunning Genetic Algorithm for {dataset_name}...")
+    # --- NSGA-II Algorithm ---
+    # NSGA-II re-ranks candidates using multi-objective Pareto optimization
+    # NOTE: NSGA-II optimizes on VALIDATION set, final evaluation is on TEST set.
+    print(f"\nRunning NSGA-II for {dataset_name}...")
 
-    # Candidate lists already generated above for fair baseline comparison
-    # Using module-level DEFAULT_WEIGHTS and constants for consistency
+    # Using module-level DEFAULT_WEIGHTS for representative solution selection
     weights = DEFAULT_WEIGHTS
 
-    # Important: GA Target Matrix -> VALIDATION Matrix
-    # The GA optimizes alignment with validation set ratings.
+    # Important: Target Matrix -> VALIDATION Matrix
+    # NSGA-II optimizes alignment with validation set ratings.
     # Test set is reserved for final unbiased evaluation only.
-    ga_target_matrix = val_matrix  # Use validation set for optimization
+    nsga_target_matrix = val_matrix  # Use validation set for optimization
 
-    # --- IDCG for GA/NSGA-II Optimization ---
-    # GA uses validation IDCG during optimization.
+    # --- IDCG for NSGA-II Optimization ---
+    # NSGA-II uses validation IDCG during optimization.
     # Test IDCG is used only for final evaluation.
     print(f"  -> Validation IDCG mean: {np.mean(val_user_idcg_scores):.4f}")
 
-    ga = GeneticRecommender(
-        num_users=num_users,
-        num_items=num_items,
-        candidate_lists=candidate_lists,
-        target_matrix=ga_target_matrix,
-        activity_map=activity_map,  # Pass original activity_map (uses user_ids as keys)
-        item_ids=item_ids,
-        user_ids=user_ids,  # Pass user_ids for consistent activity_gap calculation
-        weights=weights,
-        top_k=k_ndcg,
-    )
-    # Inject the validation-set IDCG values for optimization
-    ga.set_user_idcg_values(val_user_idcg_scores)
-
-    # --- Generate Shared Initial Population for Fair Comparison ---
-    # Both GA and NSGA-II start from the same population to isolate algorithm differences
-    print("Generating shared initial population for GA and NSGA-II...")
-    shared_initial_population = ga.initialize_population(POP_SIZE)
-
-    best_ind, history = ga.run(
-        generations=GENERATIONS,
-        pop_size=POP_SIZE,
-        crossover_rate=CROSSOVER_RATE,
-        mutation_rate=MUTATION_RATE,
-        initial_population=shared_initial_population,
-    )
-
-    # --- Final Evaluation of GA on Test Set ---
-    # We take the best individual (list of indices) and evaluate against Test Matrix.
-    # Using TEST set IDCG for final evaluation (different from optimization IDCG).
-    assert best_ind is not None, "GA failed to produce a best individual"
-    ga_recs_indices = ga.decode(best_ind)
-    ga_test_ndcg_scores = calculate_user_ndcg_scores(
-        ga_recs_indices, test_matrix, test_user_idcg_scores
-    )
-    ga_test_mdcg = np.mean(ga_test_ndcg_scores)
-
-    if activity_map:
-        ga_test_activity_gap = calculate_activity_gap(
-            ga_test_ndcg_scores, activity_map, user_ids=user_ids
-        )
-    else:
-        ga_test_activity_gap = 0.0
-
-    # --- Unified Item Entropy Calculation ---
-    # Using centralized function for consistency
-    ga_test_entropy = calculate_shannon_entropy(ga_recs_indices, num_items)
-
-    print(
-        f"GA Result (Test Set): MDCG={ga_test_mdcg:.4f}, Activity Gap={ga_test_activity_gap:.4f}, "
-        f"Item Entropy={ga_test_entropy:.4f}"
-    )
-
-    results["GA MDCG"] = ga_test_mdcg
-    results["GA Activity Gap"] = ga_test_activity_gap
-    results["GA Item Entropy"] = ga_test_entropy
-
-    # --- NSGA-II Algorithm ---
-    print(f"\nRunning NSGA-II for {dataset_name}...")
+    # Generate initial population for NSGA-II
+    print("Generating initial population for NSGA-II...")
 
     nsga = NsgaIIRecommender(
         num_users=num_users,
         num_items=num_items,
         candidate_lists=candidate_lists,
-        target_matrix=ga_target_matrix,  # Uses val_matrix (same as GA)
+        target_matrix=nsga_target_matrix,
         activity_map=activity_map,  # Pass original activity_map (uses user_ids as keys)
         item_ids=item_ids,
         user_ids=user_ids,  # Pass user_ids for consistent activity_gap calculation
@@ -311,12 +253,15 @@ def run_pipeline(
     # Inject validation-set IDCG for optimization
     nsga.set_user_idcg_values(val_user_idcg_scores)
 
+    # Generate initial population
+    initial_population = nsga.initialize_population(POP_SIZE)
+
     pareto_front, history_nsga = nsga.run(
         generations=GENERATIONS,
         pop_size=POP_SIZE,
         crossover_rate=CROSSOVER_RATE,
         mutation_rate=MUTATION_RATE,
-        initial_population=shared_initial_population,
+        initial_population=initial_population,
     )
 
     # --- Pareto Front Visualization (VALIDATION Set Metrics) ---
@@ -366,7 +311,7 @@ def run_pipeline(
 
         # --- DESIGN NOTE: Weighted Selection for Representative Solution ---
         # NSGA-II produces a Pareto front of non-dominated solutions (trade-offs).
-        # For the results TABLE, we need to pick ONE representative solution to compare against baseline/GA.
+        # For the results TABLE, we need to pick ONE representative solution to compare against baseline.
         # This weighted sum is ONLY for that purpose - it does NOT undermine the multi-objective optimization.
         # The full Pareto front diversity is reported separately below (min/max/mean for each metric).
         # Users can choose different solutions from the Pareto front based on their priorities.
@@ -574,7 +519,7 @@ def main() -> None:
         results_df = pd.DataFrame(all_results)
 
         print("\n\n" + "=" * 130)
-        print(f"{'DATASET COMPARISON (Baseline vs GA - TEST SET)':^130}")
+        print(f"{'DATASET COMPARISON (Baseline vs NSGA-II - TEST SET)':^130}")
         print("=" * 130)
         print(results_df.to_string())
         print("=" * 130)
